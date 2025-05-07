@@ -3,29 +3,25 @@ import polars as pl
 import opendp.prelude as dp
 from function_bis import *
 import numpy as np
-import os
-import s3fs
-import pandas as pd
-import geopandas as gpd
+
 
 dp.enable_features("contrib")
 
-BUCKET = "stuartbenoliel"
-FILE_KEY_S3 = "stage_3A/population_974.gpkg"
-FILE_PATH_S3 = BUCKET + "/" + FILE_KEY_S3
+n = 1000
+np.random.seed(42)  # pour reproductibilité
 
-fs = s3fs.S3FileSystem(
-    client_kwargs={'endpoint_url': 'https://' + 'minio.lab.sspcloud.fr'},
-    key=os.environ["AWS_ACCESS_KEY_ID"],
-    secret=os.environ["AWS_SECRET_ACCESS_KEY"],
-    token=os.environ["AWS_SESSION_TOKEN"])
-
-# Charger le fichier .gpkg
-with fs.open(FILE_PATH_S3, mode="rb") as file_in:
-    df = gpd.read_file(file_in)
+df = pl.DataFrame({
+    "sexe": np.random.choice(["H", "F"], size=n),
+    "region": np.random.choice(["Nord", "Sud"], size=n),
+    "revenu_annuel": np.random.randint(10000, 80000, size=n),
+    "profession": np.random.choice(["ingénieur", "médecin", "avocat"], size=n),
+    "note_satisfaction": np.random.randint(0, 20, size=n),
+    "heures_travaillees": np.random.randint(20, 60, size=n),
+    "secteur d'activité": np.random.choice(["public", "privé", "associatif"], size=n)
+})
 
 # Charger le JSON enregistré
-with open("data/request_reunion.json", encoding="utf-8") as f:
+with open("data/data.json", encoding="utf-8") as f:
     requetes = json.load(f)
 
 
