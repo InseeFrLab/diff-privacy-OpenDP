@@ -79,48 +79,76 @@ def process_request_dp(context, req):
     type_req = req["type"]
 
     if type_req == "count":
-        query = (
-            context.query()
-            .group_by(by)
-            .agg(dp.len())
-        )
+        query = count_dp(context, by)
+
     elif type_req == "mean":
-        query = (
-            context.query()
-            .group_by(by)
-            .agg(
-                pl.col(variable)
-                .fill_null(0)  # Obligatoire
-                .dp.mean(bounds=(L, U))
-            )
-        )
+        query = mean_dp(context, by, variable, l=L, u=U)
+
     elif type_req == "sum":
-        query = (
-            context.query()
-            .group_by(by)
-            .agg(
-                pl.col(variable)
-                .fill_null(0)
-                .dp.sum((L, U))
-            )
-        )
+        query = sum_dp(context, by, variable, l=L, u=U)
+
     elif type_req == "quantile":
-        if alpha is None:
-            alpha = 0.5  # default to median
-        query = (
-            context.query()
-            .group_by(by)
-            .agg(
-                pl.col(variable)
-                .fill_null(0)  # Obligatoire
-                .dp.quantile(a, range(0, 21))
-                .alias(f"{a}-Quantile")
-                for a in [alpha]
-            )
-        )
+        query = quantile_dp(context, by, variable, alpha)
 
     else:
         return f"Type de requête inconnu : {type_req}"
 
     # print(query.summarize())
     return query.release().collect()
+
+
+def count_dp(context, by):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(dp.len())
+    )
+
+    return query
+
+
+def mean_dp(context, by, variable, l, u):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)  # Obligatoire
+            .dp.mean(bounds=(l, u))
+        )
+    )
+
+    return query
+
+
+def sum_dp(context, by, variable, l, u):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)
+            .dp.sum((l, u))
+        )
+    )
+
+    return query
+
+
+def quantile_dp(context, by, variable, alpha):
+    if alpha is None:
+        alpha = 0.5  # default to median
+        
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)  # Obligatoire
+            .dp.quantile(a, range(0, 21))
+            .alias(f"{a}-Quantile")
+            for a in [alpha]
+        )
+    )
+
+    return query

@@ -24,6 +24,10 @@ fs = s3fs.S3FileSystem(
 with fs.open(FILE_PATH_S3, mode="rb") as file_in:
     df = gpd.read_file(file_in)
 
+df = pl.DataFrame(df.drop(columns="geometry"))
+
+print(df.head())
+
 # Charger le JSON enregistré
 with open("data/request_reunion.json", encoding="utf-8") as f:
     requetes = json.load(f)
@@ -41,10 +45,10 @@ context = dp.Context.compositor(
             # the biggest (and only) partition is no larger than
             #    France population
             public_info="lengths",  # make partition size public (bounded-DP)
-            max_partition_length=1000
+            max_partition_length=60_000_000
         ),
         dp.polars.Margin(
-            by=["secteur d'activité", "region", "sexe", "profession"],
+            by=["HOUSEHOLD_SIZE", "AGE_CAT", "STATUT"],
             public_info="keys",
         ),
     ],

@@ -1,13 +1,10 @@
 import requests
 import json
 import os
-from dotenv import load_dotenv
 
-# Charge les variables d'environnement depuis .env
-load_dotenv()
 
-# Récupère le token depuis la variable d'environnement
-token = os.getenv("TOKEN")
+# Récupère le token depuis "mes secrets" du datalab
+token = os.getenv("TOKEN_LLM")
 
 def extract_information_from_text(token, texte):
     url = 'https://llm.lab.sspcloud.fr/api/chat/completions'
