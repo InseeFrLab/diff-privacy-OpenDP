@@ -110,6 +110,61 @@ def make_variance_with(*, target_size, var, var_bounds, prior, budget, method="g
     return return_dp(method, mean_chain, budget)
 
 
+def count_dp(context, by):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(dp.len())
+    )
+
+    return query
+
+def mean_dp(context, by, variable, l, u):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)  # Obligatoire
+            .dp.mean(bounds=(l, u))
+        )
+    )
+
+    return query
+
+
+def sum_dp(context, by, variable, l, u):
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)
+            .dp.sum((l, u))
+        )
+    )
+
+    return query
+
+
+def quantile_dp(context, by, variable, alpha):
+    if alpha is None:
+        alpha = 0.5  # default to median
+
+    query = (
+        context.query()
+        .group_by(by)
+        .agg(
+            pl.col(variable)
+            .fill_null(0)  # Obligatoire
+            .dp.quantile(a, range(0, 21))
+            .alias(f"{a}-Quantile")
+            for a in [alpha]
+        )
+    )
+
+    return query
+
 if __name__ == "__main__":
 
     with open('data/data.csv') as input_file:

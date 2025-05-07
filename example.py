@@ -1,7 +1,7 @@
 import json
 import polars as pl
 import opendp.prelude as dp
-from function_bis import *
+from fonctions import *
 import numpy as np
 
 
@@ -31,7 +31,7 @@ context = dp.Context.compositor(
     data=df.lazy(),
     privacy_unit=dp.unit_of(contributions=1),
     privacy_loss=dp.loss_of(epsilon=5.0),
-    split_evenly_over=nb_requetes,
+    split_evenly_over=4,
     margins=[
         dp.polars.Margin(
             # the biggest (and only) partition is no larger than
