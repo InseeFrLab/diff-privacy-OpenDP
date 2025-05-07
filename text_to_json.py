@@ -70,8 +70,8 @@ texte = """
 Nous avons besoin de lancer les analyses suivantes :
 1. Un comptage de la variable 'sexe' regroupée par 'region', uniquement pour les personnes dont "age" est de plus de 18 ans.
 2. La moyenne de 'revenu_annuel' dans les bornes (10000, 75000), regroupée par 'profession' et 'region', uniquement si 'statut' est égal à 'actif'.
-3. Calcul du quantile 0.9 sur 'note_satisfaction' avec alpha = 0.05, pour les personnes dont 'note_confiance' est supérieure à 50.
-4. La somme de la variable 'heures_travaillees' dans l'intervalle (30, 60), pour les employés ayant 'contrat' différent de 'CDD' ou travaillant dans 'secteur' = 'industrie'.
+3. La somme de la variable 'heures_travaillees' dans l'intervalle (30, 60) par 'profession', pour les employés ayant 'contrat' différent de 'CDD' ou travaillant dans 'secteur' = 'industrie'.
+4. Calcul du quantile d'ordre 0.5 sur 'note_satisfaction' regroupé par 'profession', pour les personnes dont 'note_confiance' est supérieure à 50.
 """
 
 # Traitement
@@ -80,3 +80,15 @@ extracted_data = extract_information(resultat)
 
 # Affichage
 print(json.dumps(extracted_data, indent=4, ensure_ascii=False))
+
+# S'assurer que le dossier "data" existe
+os.makedirs("data", exist_ok=True)
+
+# Chemin du fichier de sortie
+output_path = "data/data.json"
+
+# Sauvegarde du JSON dans un fichier
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(extracted_data, f, indent=4, ensure_ascii=False)
+
+print(f"Fichier enregistré sous : {output_path}")
