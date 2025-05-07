@@ -2,11 +2,26 @@ import polars as pl
 from request_class import count_dp, mean_dp, sum_dp, quantile_dp
 
 
-# Fonctions de traitement
-def apply_filter(df, filtre):
-    if filtre:
-        return df.filter(eval(f'pl.col("{filtre}")'))
-    return df
+def process_request_dp(context, key_values, req):
+
+    variable = req.get("variable")
+    by = req.get("by")
+    bounds = req.get("bounds")
+    filtre = req.get("filtre")
+    alpha = req.get("alpha")
+    type_req = req["type"]
+
+    mapping = {
+            "count": lambda: count_dp(context, key_values, by=by, variable=None, filtre=filtre),
+            "mean": lambda: mean_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
+            "sum": lambda: sum_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
+            "quantile": lambda: quantile_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre, alpha=alpha)
+        }
+
+    if type_req not in mapping:
+        raise ValueError(f"Type de requête non supporté : {type_req}")
+
+    return mapping[type_req]().execute()
 
 
 def process_request(df: pl.LazyFrame, req: dict) -> pl.LazyFrame:
@@ -50,45 +65,21 @@ def process_request(df: pl.LazyFrame, req: dict) -> pl.LazyFrame:
 
     elif type_req == "quantile":
         if alpha is None:
-            alpha = 0.5
+            alpha = [0.5]
+
+        elif not isinstance(alpha, list):
+            alpha = [alpha]
+
         if by:
             df = df.group_by(by).agg(
-                pl.col(variable).quantile(alpha, interpolation="nearest").alias(f"quantile_{alpha}")
+                pl.col(variable).quantile(alpha, interpolation="nearest").alias(f"quantile_{alpha}") for alpha in alpha
             )
         else:
             df = df.select(
-                pl.col(variable).quantile(alpha, interpolation="nearest").alias(f"quantile_{alpha}")
+                pl.col(variable).quantile(alpha, interpolation="nearest").alias(f"quantile_{alpha}") for alpha in alpha
             )
 
     else:
         raise ValueError(f"Type de requête inconnu : {type_req}")
 
     return df.collect()
-
-
-def process_request_dp(context, req):
-
-    variable = req.get("variable")
-    by = req.get("by")
-    bounds = req.get("bounds")
-    alpha = req.get("alpha")
-
-    type_req = req["type"]
-
-    if type_req == "count":
-        query = count_dp(context, by=by).execute()
-
-    elif type_req == "mean":
-        query = mean_dp(context, by=by, variable=variable, bounds=bounds).execute()
-
-    elif type_req == "sum":
-        query = sum_dp(context, by=by, variable=variable, bounds=bounds).execute()
-
-    elif type_req == "quantile":
-        query = quantile_dp(context, by=by, variable=variable, bounds=bounds, alpha=alpha).execute()
-
-    else:
-        return f"Type de requête inconnu : {type_req}"
-
-    # print(query.summarize())
-    return query.release().collect()

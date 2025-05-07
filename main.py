@@ -1,7 +1,7 @@
 import json
 import polars as pl
 import opendp.prelude as dp
-from fonction import *
+from fonctions import process_request, process_request_dp
 import numpy as np
 import os
 import s3fs
@@ -27,6 +27,13 @@ with fs.open(FILE_PATH_S3, mode="rb") as file_in:
 df = pl.DataFrame(df.drop(columns="geometry"))
 
 print(df.head())
+
+key_values = {
+    "sexe": ["H", "F"],
+    "region": ["Nord", "Sud"],
+    "profession": ["ingénieur", "médecin", "avocat"],
+    "secteur d'activité": ["public", "privé", "associatif"]
+}
 
 # Charger le JSON enregistré
 with open("data/request_reunion.json", encoding="utf-8") as f:
@@ -61,5 +68,5 @@ for key, req in requetes.items():
     print(resultat)
 
     print(f"\n🔍 DP Traitement de : {key}")
-    resultat = process_request_dp(context, req)
+    resultat = process_request_dp(context, key_values, req)
     print(resultat)

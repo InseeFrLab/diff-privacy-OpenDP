@@ -1,0 +1,87 @@
+{
+    "req_1": {
+        "type": "count",
+        "variable": null,
+        "bounds": null,
+        "by": null,
+        "alpha": null,
+        "filtre": null
+    },
+    "req_2": {
+        "type": "count",
+        "variable": null,
+        "bounds": null,
+        "by": [
+            "region"
+        ],
+        "alpha": null,
+        "filtre": "heures_travaillees > 50"
+    },
+    "req_3": {
+        "type": "mean",
+        "variable": "revenu_annuel",
+        "bounds": [
+            10000,
+            75000
+        ],
+        "by": null,
+        "alpha": null,
+        "filtre": "region == 'Nord'"
+    },
+    "req_4": {
+        "type": "mean",
+        "variable": "revenu_annuel",
+        "bounds": [
+            10000,
+            75000
+        ],
+        "by": [
+            "profession",
+            "region"
+        ],
+        "alpha": null,
+        "filtre": "profession != 'médecin'"
+    },
+    "req_5": {
+        "type": "sum",
+        "variable": "heures_travaillees",
+        "bounds": [
+            30,
+            60
+        ],
+        "by": null,
+        "alpha": null,
+        "filtre": "secteur d'activité != 'public' | region == 'Sud'"
+    },
+    "req_6": {
+        "type": "sum",
+        "variable": "heures_travaillees",
+        "bounds": [
+            30,
+            60
+        ],
+        "by": [
+            "profession"
+        ],
+        "alpha": null,
+        "filtre": "secteur d'activité != 'public' | region == 'Sud'"
+    },
+    "req_7": {
+        "type": "quantile",
+        "variable": "note_satisfaction",
+        "bounds": null,
+        "by": [
+            "profession"
+        ],
+        "alpha": 0.5,
+        "filtre": "heures_travaillees <= 50"
+    },
+    "req_8": {
+        "type": "quantile",
+        "variable": "note_satisfaction",
+        "bounds": null,
+        "by": null,
+        "alpha": [0.3, 0.5, 0.8],
+        "filtre": "heures_travaillees >= 30"
+    }
+}

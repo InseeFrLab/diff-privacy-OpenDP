@@ -2,5 +2,6 @@
 Prise en main d'OpenDP dans le cadre d'un stage 3A
 
 Package à installer :
-- opendp
 - 'opendp[polars]'
+
+Lancer example.py si vous voulez voir une idée de où ca en est
