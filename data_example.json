@@ -26,7 +26,7 @@
         ],
         "by": null,
         "alpha": null,
-        "filtre": "region == 'Nord'"
+        "filtre": null
     },
     "req_4": {
         "type": "mean",
