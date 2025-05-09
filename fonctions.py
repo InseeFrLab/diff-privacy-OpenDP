@@ -1,21 +1,42 @@
 import polars as pl
+import numpy as np
 from request_class import count_dp, mean_dp, sum_dp, quantile_dp
 
 
-def process_request_dp(context, key_values, req):
+def rho_from_eps_delta(epsilon, delta):
+    if not (0 < delta < 1):
+        raise ValueError("delta must be in (0, 1)")
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
+
+    log_term = np.log(1 / delta)
+    sqrt_term = np.sqrt(log_term * (epsilon + log_term))
+    rho = 2 * log_term + epsilon - 2 * sqrt_term
+    return rho
+
+
+def eps_from_rho_delta(rho, delta):
+    if rho <= 0:
+        raise ValueError("rho must be positive")
+
+    return rho + 2 * np.sqrt(rho * np.log(1 / delta))
+
+
+def process_request_dp(context_rho, context_eps, key_values, req):
 
     variable = req.get("variable")
     by = req.get("by")
     bounds = req.get("bounds")
     filtre = req.get("filtre")
     alpha = req.get("alpha")
+    candidats = req.get("candidats")
     type_req = req["type"]
 
     mapping = {
-            "count": lambda: count_dp(context, key_values, by=by, variable=None, filtre=filtre),
-            "mean": lambda: mean_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
-            "sum": lambda: sum_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
-            "quantile": lambda: quantile_dp(context, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre, alpha=alpha)
+            "count": lambda: count_dp(context_rho, key_values, by=by, variable=None, filtre=filtre),
+            "mean": lambda: mean_dp(context_rho, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
+            "sum": lambda: sum_dp(context_rho, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre),
+            "quantile": lambda: quantile_dp(context_eps, key_values, by=by, variable=variable, bounds=bounds, filtre=filtre, alpha=alpha, candidats=candidats)
         }
 
     if type_req not in mapping:

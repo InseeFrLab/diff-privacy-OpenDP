@@ -156,8 +156,16 @@ class sum_dp(request_dp):
 
 
 class quantile_dp(request_dp):
-    def __init__(self, context, key_values, by=None, variable=None, bounds=None, filtre=None, alpha=None):
+    def __init__(self, context, key_values, variable, candidats, by=None, bounds=None, filtre=None, alpha=None):
         super().__init__(context, key_values, by, variable, bounds, filtre)
+
+        # Attention, il y a y un problème avec OpenDP au niveau des candidats
+        # Il faut qu'ils soient ordonnées de manière croissante ET de partie entière distincte
+        if candidats["type"] == "list":
+            self.candidats = candidats["values"]
+        elif candidats["type"] == "range":
+            import numpy as np
+            self.candidats = np.arange(candidats["min"], candidats["max"] + candidats["step"], candidats["step"]).tolist()
 
         if alpha is None:
             self.list_alpha = [0.5]
@@ -168,10 +176,11 @@ class quantile_dp(request_dp):
 
     def execute(self):
         query = self.context.query()
+        print(self.candidats)
         aggs = [
             pl.col(self.variable)
             .fill_null(0)
-            .dp.quantile(a, range(0, 21))
+            .dp.quantile(a, self.candidats)
             .alias(f"{a}-Quantile")
             for a in self.list_alpha
         ]

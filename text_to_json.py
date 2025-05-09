@@ -27,10 +27,10 @@ def extract_information_from_text(token, texte):
     Pour chaque requête, retourne un objet JSON structuré avec :
     - type : "count", "mean", "quantile" ou "sum"
     - variable : la variable concernée
-    - bounds : les bornes sous forme de tuple (L, U), ou null
     - by : liste des variables de regroupement, ou null
-    - alpha : pour les quantiles uniquement (sinon null)
     - filtre : chaîne représentant un filtre logique (par exemple : "var_1 > 0 & var_2 == 3 | var_4 != 'toto'"), ou null s'il n'y a pas de condition
+    - bounds : les bornes sous forme de tuple (L, U), ou null
+    - alpha : pour les quantiles uniquement (sinon null)
 
     La sortie attendue est un dictionnaire avec des clés de la forme "req_1", "req_2", etc.
     Réponds uniquement avec un JSON **valide** (sans texte autour), et sans commentaires.
