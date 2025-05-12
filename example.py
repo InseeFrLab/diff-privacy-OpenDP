@@ -88,11 +88,11 @@ if nb_req != nb_req_rho:
 
 # Application du traitement à chaque requête
 for key, req in requetes.items():
-    print(f"\n Traitement de : {key}")
+    print(f"\n Résultat de : {key}")
     resultat = process_request(df.lazy(), req)
     print(resultat)
 
-    print(f"\n🔍 Traitement DP de : {key}")
+    print(f"\n🔍 Résultat DP de : {key}")
     resultat = process_request_dp(context_rho, context_eps, key_values, req)
 
     try:
