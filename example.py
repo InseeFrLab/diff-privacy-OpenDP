@@ -32,6 +32,13 @@ key_values = {
     "secteur d'activité": ["public", "privé", "associatif"]
 }
 
+# An upper bound on the number of records in any one partition.
+# If you don’t know how many records are in the data, you can specify a very loose upper bound, 
+# for example, the size of the total population you are sampling from.
+# This is used to resolve issues raised in the paper Widespread Underestimation of Sensitivity in 
+# Differentially Private Libraries and How to Fix It.
+
+
 context_param = {
     "data": df.lazy(),
     "privacy_unit": dp.unit_of(contributions=1),
@@ -90,13 +97,13 @@ if nb_req != nb_req_rho:
 for key, req in requetes.items():
     print(f"\n Résultat de : {key}")
     resultat = process_request(df.lazy(), req)
-    #print(resultat)
+    print(resultat)
 
     print(f"\n🔍 Résultat DP de : {key}")
     resultat = process_request_dp(context_rho, context_eps, key_values, req)
 
     try:
-        print(resultat.summarize(alpha=0.05))
+        # print(resultat.summarize(alpha=0.05))
         if req.get("by") is not None:
             print(resultat.release().collect().sort(by=req.get("by")))
         else:

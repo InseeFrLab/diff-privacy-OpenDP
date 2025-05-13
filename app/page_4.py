@@ -12,7 +12,7 @@ init_session_defaults()
 
 dp.enable_features("contrib")
 
-n = 1000
+n = 100000
 np.random.seed(42)
 
 df = pl.DataFrame({
