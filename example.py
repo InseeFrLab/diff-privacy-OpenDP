@@ -90,13 +90,13 @@ if nb_req != nb_req_rho:
 for key, req in requetes.items():
     print(f"\n Résultat de : {key}")
     resultat = process_request(df.lazy(), req)
-    print(resultat)
+    #print(resultat)
 
     print(f"\n🔍 Résultat DP de : {key}")
     resultat = process_request_dp(context_rho, context_eps, key_values, req)
 
     try:
-        # print(resultat.summarize(alpha=0.05))
+        print(resultat.summarize(alpha=0.05))
         if req.get("by") is not None:
             print(resultat.release().collect().sort(by=req.get("by")))
         else:

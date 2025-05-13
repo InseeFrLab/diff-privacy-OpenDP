@@ -75,3 +75,80 @@ def parse_filter_string(filter_str: str) -> pl.Expr:
             expr = expr | next_expr
 
     return expr
+
+
+def construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes):
+    lignes = []
+
+    for key in resultats_reels.keys():
+        req = requetes.get(key, {})
+        type_req = req.get("type")
+        alpha = req.get("alpha", [])
+        if isinstance(alpha, float):
+            alpha = [alpha]  # uniformise
+
+        df_reel = resultats_reels[key]
+        dp_info = resultats_dp.get(key)
+        if dp_info is None or isinstance(df_reel, Exception) or isinstance(dp_info["data"], Exception):
+            continue
+
+        df_dp = dp_info["data"]
+        summary = dp_info.get("summary", None)
+        if summary is not None:
+            scales = summary.select("scale").to_series().to_list()
+        else:
+            scales = [None]
+
+        n_lignes = max(len(df_reel), len(df_dp))
+
+        if type_req == "quantile":
+            for j in range(n_lignes):
+                sous_requete = chr(97 + j) if n_lignes > 1 else "a"
+                for alpha_val in alpha:
+                    col_name = f"quantile_{round(alpha_val, 3)}"
+
+                    val_reelle = (
+                        df_reel[j][col_name].item()
+                        if j < len(df_reel) and col_name in df_reel.columns else None
+                    )
+                    val_dp = (
+                        df_dp[j][col_name].item()
+                        if j < len(df_dp) and col_name in df_dp.columns else None
+                    )
+
+                    lignes.append({
+                        "requête": key,
+                        "sous_requête": sous_requete,
+                        "type_requête": col_name,
+                        "valeur_réelle": val_reelle,
+                        "valeur_DP": val_dp,
+                        "écart_absolu": abs(val_reelle - val_dp) if val_reelle is not None and val_dp is not None else None,
+                        "écart_relatif": abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
+                        "scale": scales if len(scales) > 1 else [scales[0]],
+                    })
+
+        else:
+            for j in range(n_lignes):
+                sous_requete = chr(97 + j) if n_lignes > 1 else "a"
+
+                val_reelle = (
+                    df_reel[j][type_req].item()
+                    if j < len(df_reel) and type_req in df_reel.columns else None
+                )
+                val_dp = (
+                    df_dp[j][type_req].item()
+                    if j < len(df_dp) and type_req in df_dp.columns else None
+                )
+
+                lignes.append({
+                    "requête": key,
+                    "sous_requête": sous_requete,
+                    "type_requête": type_req,
+                    "valeur_réelle": val_reelle,
+                    "valeur_DP": val_dp,
+                    "écart_absolu": abs(val_reelle - val_dp) if val_reelle is not None and val_dp is not None else None,
+                    "écart_relatif": abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
+                    "scale": scales if len(scales) > 1 else [scales[0]],
+                })
+
+    return pl.DataFrame(lignes)

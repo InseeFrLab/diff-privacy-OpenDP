@@ -18,9 +18,9 @@ st.title("📊 Informations sur les requêtes à traiter")
 st.write(f"Nombre total de requêtes : **{nb_req}**")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("🔢 Count", nb_req_count)
-col2.metric("➕ Sum", nb_req_sum)
-col3.metric("📏 Mean", nb_req_mean)
+col1.metric("🔢 Comptage", nb_req_count)
+col2.metric("➕ Somme", nb_req_sum)
+col3.metric("📏 Moyenne", nb_req_mean)
 col4.metric("📊 Quantile", nb_req_quantile)
 
 # --- Visualisation par graphique circulaire ---
@@ -34,13 +34,13 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("🔐 Paramètres de confidentialité")
 
 col1, col2, col3 = st.columns(3)
-eps_tot = col1.slider("𝜖 Epsilon", 0.1, 10.0, 3.0, step=0.1)
-delta_exp = col2.slider("🔽 -log₁₀(δ)", 1, 10, 5)
-delta_tot = 10 ** (-delta_exp)
+eps_tot = col1.slider(r"Epsilon $\varepsilon$", 0.1, 10.0, 3.0, step=0.1)
+delta_exp = col2.slider(r"Delta $\delta = 10^{x}$", -10, -1, -5)
+delta_tot = 10 ** (delta_exp)
 
 # --- Calcul et affichage de rho ---
 rho_tot = rho_from_eps_delta(eps_tot, delta_tot)
-col3.metric(label="Budget équivalent en Rho", value=f"{rho_tot:.4f}")
+col3.metric(label=r"Budget équivalent en Rho $\rho$", value=f"{rho_tot:.4f}")
 
 st.subheader("⚖️ Répartition du budget (normalisé automatiquement)")
 
@@ -69,15 +69,15 @@ if nb_req != nb_req_quantile:
     eps_depense = eps_from_rho_delta(rho_utilise, delta_tot)
 
     st.success("🔒 Budget pour le bruit gaussien")
-    st.metric(label="Epsilon dépensé (bruit gaussien)", value=f"{eps_depense:.4f}")
-    st.metric(label="Delta utilisé", value=f"{delta_tot:.1e}")
+    st.metric(label=r"Epsilon $\varepsilon$ dépensé (bruit gaussien)", value=f"{eps_depense:.4f}")
+    st.metric(label=r"Delta $\delta$ utilisé", value=f"{delta_tot:.1e}")
     st.caption("Inclut les requêtes de type `count`, `sum` et `mean`")
 
 if nb_req_quantile != 0:
     eps_rest = eps_tot - eps_depense
 
     st.warning("📊 Budget pour les quantiles")
-    st.metric(label="Epsilon alloué aux quantiles", value=f"{eps_rest:.4f}")
+    st.metric(label=r"Epsilon $\varepsilon$ alloué aux quantiles", value=f"{eps_rest:.4f}")
     st.caption("Réservé aux requêtes de type `quantile`")
 
 

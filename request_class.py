@@ -42,11 +42,11 @@ class count_dp(request_dp):
         if self.by is not None:
             query = (
                 query.group_by(self.by)
-                .agg(dp.len())
+                .agg(dp.len().alias("count"))
                 .join(self.generate_public_keys(by_keys=self.by), on=self.by, how="right")
             )
         else:
-            query = query.select(dp.len())
+            query = query.select(dp.len().alias("count"))
 
         return query
 
@@ -59,6 +59,7 @@ class mean_dp(request_dp):
             pl.col(self.variable)
             .fill_null(0)
             .dp.mean(bounds=(l, u))
+            .alias("mean")
         )
 
         if self.filtre is not None:
@@ -84,6 +85,7 @@ class sum_dp(request_dp):
             pl.col(self.variable)
             .fill_null(0)
             .dp.sum((l, u))
+            .alias("sum")
         )
 
         if self.filtre is not None:
@@ -126,7 +128,7 @@ class quantile_dp(request_dp):
             pl.col(self.variable)
             .fill_null(0)
             .dp.quantile(a, self.candidats)
-            .alias(f"{a}-Quantile")
+            .alias(f"quantile_{a}")
             for a in self.list_alpha
         ]
 
