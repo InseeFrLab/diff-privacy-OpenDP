@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#9B59B6"                # Violet principal
+backgroundColor = "#121212"             # Noir profond (fond principal)
+secondaryBackgroundColor = "#1E1E1E"    # Gris foncé (encadrés, sidebar)
+textColor = "#EAEAEA"                   # Blanc cassé (texte)
+font = "sans serif"
