@@ -1,6 +1,7 @@
 import streamlit as st
 import json
-from app.initialisation import init_session_defaults
+import plotly.express as px
+from app.initialisation import init_session_defaults, update_info_request
 init_session_defaults()
 
 st.title("🧾 Éditeur de requêtes JSON")
@@ -12,7 +13,7 @@ uploaded_file = st.sidebar.file_uploader("Chargez un fichier .json", type="json"
 if st.sidebar.button("🔄 Réinitialiser avec `data_example.json`"):
     try:
         with open("data_example.json", "r", encoding="utf-8") as f:
-            st.session_state.data_json = json.load(f)
+            st.session_state.requetes = json.load(f)
             st.session_state.source = "📦 Fichier par défaut : `data_example.json`"
         st.sidebar.success("✅ Réinitialisé avec succès.")
     except FileNotFoundError:
@@ -20,7 +21,7 @@ if st.sidebar.button("🔄 Réinitialiser avec `data_example.json`"):
 
 if uploaded_file:
     try:
-        st.session_state.data_json = json.load(uploaded_file)
+        st.session_state.requetes = json.load(uploaded_file)
         st.session_state.source = "📁 Fichier importé"
         st.sidebar.success("✅ Fichier chargé.")
     except json.JSONDecodeError:
@@ -31,9 +32,9 @@ st.sidebar.markdown("💡 Par défaut, le fichier `data_example.json` est utilis
 # --- Affichage JSON actuel ---
 st.subheader("📋 Requêtes actuelles")
 
-if st.session_state.data_json:
+if st.session_state.requetes:
     st.caption(st.session_state.source)
-    st.json(st.session_state.data_json, expanded=True)
+    st.json(st.session_state.requetes, expanded=True)
 else:
     st.info("Aucune requête à afficher.")
 
@@ -57,9 +58,9 @@ with st.form("form_ajout_requete", clear_on_submit=True):
     submit = st.form_submit_button("Ajouter la requête")
 
 if submit:
-    data = st.session_state.data_json
+    requetes = st.session_state.requetes
     # Génère un identifiant unique du type req_1, req_2, ...
-    existing_keys = set(st.session_state.data_json.keys())
+    existing_keys = set(st.session_state.requetes.keys())
     i = 1
     while f"req_{i}" in existing_keys:
         i += 1
@@ -67,7 +68,7 @@ if submit:
     try:
         bounds_val = json.loads(bounds) if bounds else None
 
-        data[new_key] = {
+        requetes[new_key] = {
             "type": req_type,
             "variable": variable or None,
             "bounds": bounds_val,
@@ -81,18 +82,47 @@ if submit:
 
     else:
         st.session_state["success_message"] = f"✅ Requête {new_key} ajoutée."
+        update_info_request()
         st.rerun()
 
 # --- Suppression d'une requête ---
 st.subheader("🗑️ Supprimer une requête")
 
-if st.session_state.data_json:
-    req_list = list(st.session_state.data_json.keys())
+if st.session_state.requetes:
+    req_list = list(st.session_state.requetes.keys())
     selected_req = st.selectbox("Sélectionnez une requête à supprimer", req_list)
 
     if st.button("❌ Supprimer la requête"):
-        del st.session_state.data_json[selected_req]
+        del st.session_state.requetes[selected_req]
         st.session_state["success_message"] = f"🗑️ Requête `{selected_req}` supprimée."
+        update_info_request()
         st.rerun()
 else:
     st.info("Aucune requête disponible à supprimer.")
+
+# --- Comptage des types de requêtes ---
+requetes = st.session_state.requetes
+nb_req = len(requetes)
+
+nb_req_count = st.session_state.nb_req_count
+nb_req_sum = st.session_state.nb_req_sum
+nb_req_mean = st.session_state.nb_req_mean
+nb_req_quantile = st.session_state.nb_req_quantile
+
+# --- Affichage structuré ---
+st.title("📊 Informations sur les requêtes à traiter")
+st.write(f"Nombre total de requêtes : **{nb_req}**")
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("🔢 Comptage", nb_req_count)
+col2.metric("➕ Somme", nb_req_sum)
+col3.metric("📏 Moyenne", nb_req_mean)
+col4.metric("📊 Quantile", nb_req_quantile)
+
+# --- Visualisation par graphique circulaire ---
+data_pie = {
+    "Type": ["count", "sum", "mean", "quantile"],
+    "Nombre": [nb_req_count, nb_req_sum, nb_req_mean, nb_req_quantile]
+}
+fig = px.pie(data_pie, names="Type", values="Nombre", title="Répartition des types de requêtes")
+st.plotly_chart(fig, use_container_width=True)

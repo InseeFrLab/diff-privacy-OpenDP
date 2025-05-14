@@ -1,26 +1,11 @@
 # app.py
 import streamlit as st
-import numpy as np
-import polars as pl
 import plotly.express as px
-
-# Génération des données simulées
-n = 1000
-np.random.seed(42)
-
-df_polars = pl.DataFrame({
-    "sexe": np.random.choice(["H", "F"], size=n),
-    "region": np.random.choice(["Nord", "Sud"], size=n),
-    "revenu_annuel": np.random.randint(10000, 80000, size=n),
-    "profession": np.random.choice(["ingénieur", "médecin", "avocat"], size=n),
-    "note_satisfaction": np.random.randint(0, 20, size=n),
-    "heures_travaillees": np.random.randint(20, 60, size=n),
-    "secteur d'activité": np.random.choice(["public", "privé", "associatif"], size=n)
-})
+from app.initialisation import init_session_defaults
+init_session_defaults()
 
 # Conversion en pandas
-df = df_polars.to_pandas()
-
+df = st.session_state.df.to_pandas()
 
 # Sidebar
 st.sidebar.header("🎛️ Filtres")
