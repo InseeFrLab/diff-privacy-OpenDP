@@ -1,8 +1,8 @@
 import streamlit as st
 import json
 from app.constants import DF_POLARS, CONTEXT_PARAM, KEY_VALUES
-from fonctions import eps_from_rho_delta, rho_from_eps_delta
 import opendp.prelude as dp
+import numpy as np
 
 dp.enable_features("contrib")
 
@@ -34,8 +34,7 @@ def init_session_defaults():
     st.session_state.setdefault("key_values", KEY_VALUES)
 
     # Confidentialité différentielle
-    st.session_state.setdefault("eps_tot", 3.0)
-    st.session_state.setdefault("delta_tot", 1e-5)
+    st.session_state.setdefault("rho_budget", 0.1)
 
 
 def update_info_request():
@@ -63,10 +62,10 @@ def update_info_request():
     st.session_state.poids_requetes_quantile = poids_requetes_quantile
 
 
-def update_context(eps_tot, delta_tot, poids_requetes_rho, poids_requetes_quantile):
+def update_context(rho_budget, poids_requetes_rho, poids_requetes_quantile):
 
-    rho_utilise = rho_from_eps_delta(eps_tot, delta_tot) * (1 - sum(poids_requetes_quantile))
-    eps_rest = eps_tot - eps_from_rho_delta(rho_utilise, delta_tot)
+    rho_utilise = rho_budget * (1 - sum(poids_requetes_quantile))
+    eps_quantile = np.sqrt(8 * rho_budget * sum(poids_requetes_quantile))
 
     context_rho = dp.Context.compositor(
             **CONTEXT_PARAM,
@@ -76,7 +75,7 @@ def update_context(eps_tot, delta_tot, poids_requetes_rho, poids_requetes_quanti
 
     context_eps = dp.Context.compositor(
             **CONTEXT_PARAM,
-            privacy_loss=dp.loss_of(epsilon=eps_rest),
+            privacy_loss=dp.loss_of(epsilon=eps_quantile),
             split_by_weights=poids_requetes_quantile
         )
 

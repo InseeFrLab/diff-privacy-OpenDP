@@ -1,217 +1,154 @@
 import streamlit as st
-from app.initialisation import init_session_defaults, update_context
-from fonctions import construire_dataframe_comparatif
-from process_tools import process_request, process_request_dp
-import opendp.prelude as dp
 import numpy as np
-from math import log10
-import plotly.express as px
-import plotly.graph_objects as go
+from app.initialisation import init_session_defaults, update_context
+from fonctions import eps_from_rho_delta
+from process_tools import process_request_dp
+
 init_session_defaults()
 
-dp.enable_features("contrib")
+
+def format_scientifique(val, precision=2):
+    base, exposant = f"{val:.{precision}e}".split("e")
+    exposant = int(exposant)  # conversion propre de l'exposant
+    return f"10^{exposant}"
+
+
+def format_scale(scale):
+    # Si c'est un scalaire
+    if np.isscalar(scale):
+        return f"{scale:.1f}" if abs(scale) < 1000 else f"{scale:.1e}"
+
+    # Sinon, liste de valeurs
+    return "(" + ", ".join(f"{s:.1f}" if abs(s) < 1000 else f"{s:.1e}" for s in scale) + ")"
+
+
+# Titre
+st.subheader("🔐 Paramètres de confidentialité")
+with st.container():
+    col1, col2, col3, col4 = st.columns(4)
+
+    rho_depense_init = col1.slider(r"Budget $\rho$ déjà dépensé", 0.0, 1.0, value=0.1, step=0.01)
+    rho_budget = col2.slider(r"Budget $\rho$ de l'étude", 0.01, 1.0, value=0.1)
+
+    delta_exp = st.sidebar.slider(r"Delta $\delta = 10^{x}$", -10, -1, -5)
+    delta = 10 ** (delta_exp)
+    epsilon = eps_from_rho_delta(rho_depense_init + rho_budget, delta)
+
+    col3.metric("Budget total en ρ", f"{rho_depense_init + rho_budget:.4f}")
+    col4.metric("Budget total en (ε, δ)", f"({epsilon:.4f}, {format_scientifique(delta)})")
+# Marqueur de fin
+st.markdown("---")
+
+st.markdown("### 🔧 Répartition du budget ρ par requête")
+requetes = st.session_state.requetes
+nb_req = len(requetes)
+poids_raw = {}
+clefs_requetes = list(requetes.keys())
+
+# --- Organisation en colonnes verticales par type de requête ---
+types_possibles = ["count", "sum", "mean", "quantile"]
+type_to_keys = {t: [k for k, v in requetes.items() if v["type"] == t] for t in types_possibles}
+
+# Création des colonnes : une par type
+cols = st.columns(len(types_possibles))
+
+for col, req_type in zip(cols, types_possibles):
+    with col:
+        st.markdown(f"#### `{req_type}`")
+        for key in type_to_keys[req_type]:
+            req = requetes[key]
+            slider_value = st.slider(
+                f"**{key}**",
+                min_value=0.0,
+                max_value=1.0,
+                value=1.0 / nb_req,
+                step=0.01,
+                key=f"slider_{key}"
+            )
+            poids_raw[key] = slider_value
+
+# --- Normalisation automatique ---
+total_raw = sum(poids_raw.values())
+
+if total_raw == 0:
+    st.warning("⚠️ La somme des poids est nulle. Les poids ne peuvent pas être normalisés.")
+    poids_normalises = {i: 0.0 for i in poids_raw}
+else:
+    poids_normalises = {i: v / total_raw for i, v in poids_raw.items()}
+
+eps_depense = 0
+
+somme_poids_quantile = sum(
+    poids_normalises[clef]
+    for clef, req in requetes.items()
+    if req["type"] == "quantile"
+)
 
 df = st.session_state.df
 context_param = st.session_state.context_param
 key_values = st.session_state.key_values
 
-requetes = st.session_state.requetes
-nb_req = len(requetes)
+# Liste des poids, dans l’ordre des requêtes (hors quantile)
+poids_requetes_rho = [
+    poids_normalises[clef]
+    for clef, req in requetes.items()
+    if req["type"] != "quantile"
+]
 
-# Sidebar
-st.sidebar.header("Budget de confidentialité défini")
-eps_tot = st.sidebar.slider(r"Epsilon $\varepsilon$", 0.1, 10.0, value=st.session_state.eps_tot, step=0.1)
-delta_exp = st.sidebar.slider(r"Delta $\delta = 10^{x}$", -10, -1, value=int(log10(st.session_state.delta_tot)))
-delta_tot = 10 ** (delta_exp)
+poids_requetes_quantile = [
+    poids_normalises[clef]
+    for clef, req in requetes.items()
+    if req["type"] == "quantile"
+]
+
+st.session_state.poids_requetes_rho = poids_requetes_rho
+st.session_state.poids_requetes_quantile = poids_requetes_quantile
+
 # Initialisation de la barre dans la sidebar
 progress_bar = st.sidebar.progress(0, text="Progression du traitement des requêtes...")
 
-(context_rho, context_eps) = update_context(eps_tot, delta_tot, st.session_state.poids_requetes_rho, st.session_state.poids_requetes_quantile)
-
-tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Précision", "Tableau résumé", "Dataviz"])
-
-# Dictionnaire pour stocker les résultats DP
-resultats_dp = {}
-
-# Dictionnaire pour stocker les résultats réels
-resultats_reels = {}
-
 # --- Calcul (1 seule fois) ---
-for i, (key, req) in enumerate(requetes.items(), 1):
-    try:
-        # Résultat réel
-        resultat = process_request(df.lazy(), req)
-        if req.get("by") is not None:
-            resultat = resultat.sort(by=req.get("by"))
-        resultats_reels[key] = resultat
-    except Exception as e:
-        resultats_reels[key] = e
+cols_per_row = 3
+keys = list(requetes.keys())
+nb_req = len(keys)
 
-    try:
-        # Résultat DP
+# --- Organisation des résultats en colonnes par type ---
+st.markdown("---")
+st.markdown("### 📊 Résultats des requêtes (DP) par type")
+
+type_to_col = {t: col for t, col in zip(types_possibles, st.columns(len(types_possibles)))}
+
+processed = 0
+total = len(keys)
+
+count_rho = -1
+count_quantile = -1
+
+# Affichage dans l'ordre des requêtes, mais dans la colonne du type
+for key in keys:
+    req = requetes[key]
+    req_type = req["type"]
+    col = type_to_col[req_type]
+
+    if req_type != "quantile":
+        count_rho += 1
+        poids_requetes_rho[0], poids_requetes_rho[count_rho] = poids_requetes_rho[count_rho], poids_requetes_rho[0]
+    else:
+        count_quantile +=1
+        poids_requetes_quantile[0], poids_requetes_quantile[count_quantile] = poids_requetes_quantile[count_quantile], poids_requetes_quantile[0]
+
+    (context_rho, context_eps) = update_context(rho_budget, poids_requetes_rho, poids_requetes_quantile)
+
+    with col:
+        st.markdown(f"##### 🔐 `{key}`")
         resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
-        df_result = resultat_dp.release().collect()
-        if req.get("by") is not None:
-            df_result = df_result.sort(by=req.get("by"))
-            first_col = df_result.columns[0]
-            new_order = df_result.columns[1:] + [first_col]
-            df_result = df_result.select(new_order)
-        resultats_dp[key] = {"data": df_result, "summary": resultat_dp.summarize(alpha=0.05)}
-    except Exception as e:
-        resultats_dp[key] = {"data": e, "summary": e}
+        scale = resultat_dp.summarize(alpha=0.05)["scale"]
+        print(format_scale(scale))
+        st.metric(label="Ecart type du bruit injecté", value=format_scale(scale))
+        st.caption(f"Requête {processed + 1} sur {total}")
 
-    progress_bar.progress(int(100 * i / nb_req), text=f"Progression : {i}/{nb_req}")
+    processed += 1
+    progress_bar.progress(int(100 * processed / total), text=f"Progression : {processed}/{total}")
 
-# --- Affichage ---
-with tab1:
-    col_reel, col_dp = st.columns(2)
-    for key in requetes:
-        with col_reel:
-            st.markdown(f"### ✅ Résultat réel pour : `{key}`")
-            res = resultats_reels[key]
-            if isinstance(res, Exception):
-                st.error(f"Erreur : {res}")
-            else:
-                st.dataframe(res)
-
-        with col_dp:
-            st.markdown(f"### 🔐 Résultat DP pour : `{key}`")
-            res = resultats_dp[key]["data"]
-            if isinstance(res, Exception):
-                st.error(f"Erreur : {res}")
-            else:
-                st.dataframe(res)
-
-with tab2:
-    for key in requetes:
-        st.markdown(f"### 📏 Précision à 95% pour : `{key}`")
-        res = resultats_dp[key]["summary"]
-        if isinstance(res, Exception):
-            st.error(f"Erreur : {res}")
-        else:
-            st.dataframe(res)
-
-df_comparatif = construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes)
-
-with tab3:
-    st.markdown("### 📊 Comparaison des résultats réels et DP")
-    st.dataframe(df_comparatif)
-
-with tab4:
-    # Conversion du DataFrame Polars → Pandas
-    df_plot = df_comparatif.to_pandas()
-
-    # Créer la colonne scale_size
-    def compute_scale_size(row):
-        # On exclut quantiles et moyennes
-        if str(row["type_requête"]).startswith("quantile") or str(row["type_requête"]).startswith("mean"):
-            return np.nan
-        # Calcul du scale_size pour les autres
-        else:
-            return row["scale"][0] / row["scale"][1] if len(row["scale"]) > 1 else row["scale"][0]
-        return np.nan
-
-    df_plot["scale_size"] = df_plot.apply(compute_scale_size, axis=1)
-    # print(df_plot)
-
-    df_plot = df_plot.dropna(subset=["valeur_réelle", "valeur_DP"])
-
-    # Création du graphique
-    fig = go.Figure()
-
-    # Couleurs automatiques par type de requête
-    type_requetes = df_plot["type_requête"].unique()
-    color_map = px.colors.qualitative.Plotly
-
-    for i, t in enumerate(type_requetes):
-        df_type = df_plot[df_plot["type_requête"] == t]
-        color = color_map[i % len(color_map)]
-
-        # Ajouter les cercles si scale_size est défini
-        df_with_scale = df_type[df_type["scale_size"].notna()]
-        if not df_with_scale.empty:
-            fig.add_trace(go.Scatter(
-                x=df_with_scale["valeur_réelle"],
-                y=df_with_scale["valeur_DP"],
-                mode="markers",
-                marker=dict(
-                    size=2 * df_with_scale["scale_size"],
-                    color=color,
-                    opacity=0.2,
-                    line=dict(width=0)
-                ),
-                name=f"{t} (incertitude)",
-                showlegend=True,
-                hoverinfo="skip"
-            ))
-
-        # Ajouter les points principaux (toujours)
-        fig.add_trace(go.Scatter(
-            x=df_type["valeur_réelle"],
-            y=df_type["valeur_DP"],
-            mode="markers",
-            marker=dict(
-                size=6,
-                color=color,
-                line=dict(width=1, color="black")
-            ),
-            name=t
-        ))
-
-    # Ajouter la droite y = x
-    global_min = min(df_plot["valeur_réelle"].min(), df_plot["valeur_DP"].min())
-    global_max = max(df_plot["valeur_réelle"].max(), df_plot["valeur_DP"].max())
-
-    fig.add_trace(go.Scatter(
-        x=[global_min, global_max],
-        y=[global_min, global_max],
-        mode="lines",
-        line=dict(color="black", dash="dash"),
-        name="y = x"
-    ))
-
-    # Mise en page : quadrillage, fond blanc
-    fig.update_layout(
-        title="Comparaison des valeurs réelles vs bruitées avec incertitude (scale)",
-        xaxis=dict(
-            title="Valeur réelle",
-            showgrid=True,
-            gridcolor='lightgrey',
-            zeroline=False
-        ),
-        yaxis=dict(
-            title="Valeur bruitée (DP)",
-            showgrid=True,
-            gridcolor='lightgrey',
-            zeroline=False
-        ),
-        legend_title="Type de requête",
-        plot_bgcolor="white"
-    )
-
-    # Affichage Streamlit
-    st.plotly_chart(fig)
-
-    # Étape 2 : Agrégation (exemple : moyenne par requête)
-    df_agg = df_plot.groupby("requête", as_index=False)["écart_relatif"].mean()
-    df_agg = df_agg.merge(df_plot.drop_duplicates(subset=["requête"])[["requête", "type_requête"]], on="requête", how="left")
-
-    # Étape 3 : Barplot
-    fig_bar = px.bar(
-        df_agg,
-        x="requête",
-        y="écart_relatif",
-        title="Écart relatif moyen par requête",
-        labels={"écart_relatif": "Écart relatif moyen", "requête": "Requête"},
-        text_auto=".2%",  # Affiche les valeurs sur les barres
-        color="type_requête",
-    )
-
-    fig_bar.update_layout(
-        xaxis=dict(showgrid=False),
-        yaxis=dict(title="Écart relatif moyen", showgrid=True, gridcolor='lightgrey'),
-        plot_bgcolor="white"
-    )
-
-    # Affichage dans Streamlit
-    st.plotly_chart(fig_bar)
+# --- Sauvegarde dans la session pour accès inter-pages ---
+st.session_state.rho_budget = rho_budget

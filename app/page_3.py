@@ -1,131 +1,72 @@
 import streamlit as st
-from app.initialisation import init_session_defaults, update_context
-from fonctions import eps_from_rho_delta, rho_from_eps_delta
-from process_tools import process_request_dp
+import numpy as np
+import plotly.graph_objects as go
+from scipy.stats import norm
 
-init_session_defaults()
+st.title("📊 Exploration interactive de la Loi Gaussienne entière (Integer Gaussian)")
+st.markdown("""
+Cette application vous permet de visualiser concrètement une **loi normale discrète** centrée sur une moyenne entière, avec un écart type spécifié.
+Nous considérons ici une version discrétisée de la loi normale, souvent utilisée en **confidentialité différentielle** sous le nom de *Integer Gaussian*.
+""")
 
-st.subheader("🔐 Paramètres de confidentialité")
+# --- Entrée manuelle des paramètres ---
+st.sidebar.header("⚙️ Paramètres de la loi normale entière")
+mu = st.sidebar.number_input("Moyenne entière (μ)", min_value=-1_000_000, max_value=1_000_000, value=0, step=1)
+sigma = st.sidebar.number_input("Écart type (σ)", min_value=0.1, max_value=10_000.0, value=3.0, step=0.1)
 
-col1, col2, col3 = st.columns(3)
-eps_tot = col1.slider(r"Epsilon $\varepsilon$", 0.1, 10.0, 3.0, step=0.1)
-delta_exp = col2.slider(r"Delta $\delta = 10^{x}$", -10, -1, -5)
-delta_tot = 10 ** (delta_exp)
+# Discrétisation sans doublons
+raw_x_vals = np.arange(mu - 6*sigma, mu + 6*sigma + 1)
+x_vals = np.round(raw_x_vals).astype(int)
+unique_x, indices = np.unique(x_vals, return_inverse=True)
 
-# --- Calcul et affichage de rho ---
-rho_tot = rho_from_eps_delta(eps_tot, delta_tot)
-col3.metric(label=r"Budget équivalent en Rho $\rho$", value=f"{rho_tot:.4f}")
+# Agrégation des probas sur les entiers uniques
+raw_p_vals = norm.pdf(raw_x_vals, loc=mu, scale=sigma)
+p_vals = np.zeros_like(unique_x, dtype=float)
+for i, idx in enumerate(indices):
+    p_vals[idx] += raw_p_vals[i]
+p_vals /= p_vals.sum()  # Normalisation
 
-st.markdown("### 🔧 Répartition du budget ρ par requête")
-requetes = st.session_state.requetes
-nb_req = len(requetes)
-poids_raw = {}
-clefs_requetes = list(requetes.keys())
+# --- Calcul des intervalles cumulés ---
+intervales = {
+    "50%": 0.50,
+    "75%": 0.75,
+    "90%": 0.90,
+    "95%": 0.95,
+    "99%": 0.99
+}
 
-# On divise en groupes de 3 sliders par ligne
-for i in range(0, nb_req, 3):
-    cols = st.columns(3)
-    for j in range(3):
-        idx = i + j
-        if idx < nb_req:
-            key = clefs_requetes[idx]
-            req = requetes[key]
-            label = f"{key} – {req['type']}"
-            slider_value = cols[j].slider(
-                label,
-                min_value=0.0,
-                max_value=1.0,
-                value=1.0 / nb_req,
-                step=0.01,
-                key=f"slider_{key}"
-            )
-            poids_raw[key] = slider_value
+cdf = np.cumsum(p_vals)
+cdf_dict = dict(zip(x_vals, cdf))
 
-# --- Normalisation automatique ---
-total_raw = sum(poids_raw.values())
+# --- Affichage des intervalles ---
+with st.expander("📐 Intervalles de concentration autour de la moyenne"):
+    for niveau, seuil in intervales.items():
+        indices = np.where(cdf >= (1 - seuil) / 2)[0]
+        low_idx = indices[0] if len(indices) > 0 else 0
+        high_idx = np.where(cdf <= 1 - (1 - seuil) / 2)[0]
+        high_idx = high_idx[-1] if len(high_idx) > 0 else len(x_vals) - 1
+        st.markdown(f"- **{niveau}** des valeurs sont entre `{x_vals[low_idx]}` et `{x_vals[high_idx]}`")
 
-if total_raw == 0:
-    st.warning("⚠️ La somme des poids est nulle. Les poids ne peuvent pas être normalisés.")
-    poids_normalises = {i: 0.0 for i in poids_raw}
-else:
-    poids_normalises = {i: v / total_raw for i, v in poids_raw.items()}
+# --- Affichage du graphe discret ---
+fig = go.Figure()
+fig.add_trace(go.Bar(x=x_vals, y=p_vals, name='Probabilités discrètes', marker_color='steelblue'))
+fig.add_vline(x=mu, line=dict(color="black", dash="dash"), annotation_text=f"μ = {mu}", annotation_position="top left")
 
-eps_depense = 0
-
-somme_poids_quantile = sum(
-    poids_normalises[clef]
-    for clef, req in requetes.items()
-    if req["type"] == "quantile"
+fig.update_layout(
+    title="Distribution d'une loi Gaussienne entière (discrétisée)",
+    xaxis_title="Valeurs entières",
+    yaxis_title="Probabilité",
+    template="plotly_white",
+    height=500
 )
 
-df = st.session_state.df
-context_param = st.session_state.context_param
-key_values = st.session_state.key_values
+st.plotly_chart(fig, use_container_width=True)
 
-# Liste des poids, dans l’ordre des requêtes (hors quantile)
-poids_requetes_rho = [
-    poids_normalises[clef]
-    for clef, req in requetes.items()
-    if req["type"] != "quantile"
-]
+# --- Interprétation ---
+st.markdown("""
+### 🧠 Interprétation intuitive (discrétisée)
 
-poids_requetes_quantile = [
-    poids_normalises[clef]
-    for clef, req in requetes.items()
-    if req["type"] == "quantile"
-]
-
-st.session_state.poids_requetes_rho = poids_requetes_rho
-st.session_state.poids_requetes_quantile = poids_requetes_quantile
-
-# Initialisation de la barre dans la sidebar
-progress_bar = st.sidebar.progress(0, text="Progression du traitement des requêtes...")
-
-# --- Calcul (1 seule fois) ---
-cols_per_row = 3
-keys = list(requetes.keys())
-nb_req = len(keys)
-(context_rho, context_eps) = update_context(eps_tot, delta_tot, poids_requetes_rho, poids_requetes_quantile)
-
-for i in range(0, nb_req, cols_per_row):
-    cols = st.columns(cols_per_row)
-
-    for j in range(cols_per_row):
-        idx = i + j
-        if idx < nb_req:
-            key = keys[idx]
-            req = requetes[key]
-
-            with cols[j]:
-                # Résultat DP
-                resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
-                scale = resultat_dp.summarize(alpha=0.05)["scale"]
-                resultat_dp.release()
-                st.markdown(f"#### 🔐 `{key}`")
-                st.metric(label="DP scale", value=round(scale[0], 2))
-
-                st.caption(f"Requête {idx+1} sur {nb_req}")
-
-            # Barre de progression en bas de chaque ligne
-            progress_bar.progress(int(100 * (idx+1) / nb_req), text=f"Progression : {idx+1}/{nb_req}")
-
-if nb_req != st.session_state.nb_req_quantile:
-    rho_utilise = rho_tot * (1 - somme_poids_quantile)
-    eps_depense = eps_from_rho_delta(rho_utilise, delta_tot)
-
-    st.success("🔒 Budget pour le bruit gaussien")
-    st.metric(label=r"Epsilon $\varepsilon$ dépensé (bruit gaussien)", value=f"{eps_depense:.4f}")
-    st.metric(label=r"Delta $\delta$ utilisé", value=f"{delta_tot:.1e}")
-    st.caption("Inclut les requêtes de type `count`, `sum` et `mean`")
-
-if st.session_state.nb_req_quantile != 0:
-    eps_rest = eps_tot - eps_depense
-
-    st.warning("📊 Budget pour les quantiles")
-    st.metric(label=r"Epsilon $\varepsilon$ alloué aux quantiles", value=f"{eps_rest:.4f}")
-    st.caption("Réservé aux requêtes de type `quantile`")
-
-
-# --- Sauvegarde dans la session pour accès inter-pages ---
-st.session_state.eps_tot = eps_tot
-st.session_state.delta_tot = delta_tot
+- **μ (mu)** est le centre de la distribution, ici une valeur entière.
+- **σ (sigma)** mesure la dispersion : plus σ est grand, plus la masse se répartit loin de la moyenne.
+- Cette version discrète est utile pour les implémentations informatiques ou les mécanismes de confidentialité différentielle (comme le *Discrete Gaussian Mechanism*).
+""")
