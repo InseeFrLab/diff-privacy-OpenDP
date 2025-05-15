@@ -2,7 +2,7 @@ import re
 import operator
 import numpy as np
 import polars as pl
-
+from scipy.optimize import fsolve
 
 def rho_from_eps_delta(epsilon, delta):
     if not (0 < delta < 1):
@@ -20,7 +20,15 @@ def eps_from_rho_delta(rho, delta):
     if rho < 0:
         raise ValueError("rho must be positive")
 
-    return rho + 2 * np.sqrt(rho * np.log(1 / delta))
+    def equation(y, rho, delta):
+        return y - (rho + 2 * np.sqrt(rho * np.log(1 / (delta * (1 + (y - rho) / (2 * rho))))))
+
+    epsilon_base = rho + 2 * np.sqrt(rho * np.log(1 / delta))
+    y0 = rho + 1
+    epsilon_small = fsolve(equation, y0, args=(rho, delta))[0]
+    print("Diff formule de base :", epsilon_base - epsilon_small)
+
+    return epsilon_small
 
 
 # Map des opérateurs Python vers leurs fonctions correspondantes
