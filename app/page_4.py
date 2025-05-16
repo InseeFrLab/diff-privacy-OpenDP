@@ -142,6 +142,7 @@ for key in keys:
     with col:
         st.markdown(f"##### 🔐 `{key}`")
         resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
+        print(1)
         scale = resultat_dp.summarize(alpha=0.05)["scale"]
         st.metric(label="Ecart type du bruit injecté", value=format_scale(scale))
         st.caption(f"Requête {processed + 1} sur {total}")

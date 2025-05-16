@@ -7,13 +7,16 @@
         "filtre": null
     },
     "req_2": {
-        "type": "count",
-        "variable": null,
-        "bounds": null,
+        "type": "mean",
+        "variable": "revenu_annuel",
+        "bounds": [
+            10000,
+            75000
+        ],
         "by": [
             "region"
         ],
-        "filtre": "heures_travaillees > 50"
+        "filtre": null
     },
     "req_3": {
         "type": "mean",
