@@ -40,11 +40,6 @@ CONTEXT_PARAM = {
     "margins": [
         dp.polars.Margin(max_partition_length=1000),
         dp.polars.Margin(
-            by=["region"],
-            public_info="lengths",
-            max_partition_length=1000
-        ),
-        dp.polars.Margin(
             by=["secteur d'activité", "region", "sexe", "profession"],
             public_info="keys",
             max_partition_length=1000

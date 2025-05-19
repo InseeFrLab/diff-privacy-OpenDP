@@ -14,7 +14,7 @@ Sensibilité en max(abs(L), U) est bien dépendant de la moyenne, somme.
 Deux cas de figure : 
 - on raisonne en terme de unbounded DP donc de type datasize inconnu.
 - on raisonne en terme de bounded DP donc datasize connu => dp.polars.Margin(public_info="lengths") 
-    ce qui permet d'avoir une sensibilité en d_in // 2 * (U - L) où d_in contribution d'un individu. 
+    ce qui permet d'avoir une sensibilité en (d_in // 2) * (U - L) où d_in contribution d'un individu. 
     Seulement visiblement d_in > 1 (notion de distance en terme d'ajout/suppression de lignes ?) donc augmentation de la sensibilité pour les autres requetes
     + Tout est cassé en cas de group_by (fixable) ou de filter (plus difficilement)
 
@@ -26,3 +26,7 @@ directement (car elle divise équitablement le budget entre les quantiles). Cela
 
 A faire : ajouter un nouveau mécanisme pour la moyenne
 map(d_in) = d_in // 2 * (U - L) / n (option resize non disponible ici)
+Explorer make_private_lazyframe
+
+
+Impossible de mettre une marge lengths connu si privacy unit=1
