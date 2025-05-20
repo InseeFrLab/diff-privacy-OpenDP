@@ -34,43 +34,29 @@ class request_dp(ABC):
 
 class count_dp(request_dp):
     """
-    Comptage différentiellement privé – Notes de la fonction d'OpenDP
+    Comptage différentiellement privé - Notes de la fonction d'OpenDP
 
     - Sensibilité = privacy_unit
 
-    - Ne pas exécuter la requête si la marge est supposée connue mais non fournie
+    - Ne pas exécuter la requête si la marge est supposée connue (argument lengths dans un margin)
         → sinon : ValueError: unable to infer bounds
-        → la contourner via une requête jointe ne fonctionne pas ici
+        → la contourner via une requête DP jointe à celle-ci (pas possible via ma fonction)
 
-    - La requête peut se faire en (ε)-DP (Laplace) ou (ρ)-DP (Gaussien)
+    - La requête peut se faire en (epsilon)-DP (Laplace) ou (rho)-zCDP (Gaussien)
 
     - Si group_by :
-        - Les clés doivent être incluses dans une margin sinon fallback en (ε, δ)-DP avec seuil
-        - ε affecte l'écart-type du bruit + le seuil
-        - δ affecte uniquement le seuil
+        - L'argument keys doit être inclus dans un margin sinon (epsilon, delta)-DP avec seuil
+        → Autre solution : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
+        - epsilon affecte l'écart-type du bruit + le seuil
+        - delta affecte uniquement le seuil
         - Formule classique pour l'écart-type, mais le seuil reste mal compris
 
     - Si filter :
-        - La margin n’est pas prise en compte
-        - Problème potentiel avec group_by
-        - Solution : jointure avec un ensemble de clés (complet, partiel ou vide)
-        - Si budget en (ε, δ), aucun seuil n’est appliqué
-    """
-    """
- 
-        - Ne pas faire la requête si on suppose la marge connue sinon erreur 'ValueError: unable to infer bounds'
-            -> Solution = la faire en même temps qu'une autre requête (marche pas avec ma fonction)
-        - Ne pas faire la requête si on suppose la marge connue
-        - Requête possible via epsilon (Laplace) ou rho (Gaussian) selon les formules définies
-
-        - Si group_by : a mettre les clés de la variables dans un margin sinon requête en (epsilon, delta) via un seuil
-            - changer epsilon bouge l'écart type du bruit et le seuil
-            - changer delta modifie uniquement le seuil
-            - l'écart type correspond à la formule classique mais pas d'idée pour le seuil
-
-        - Si filter : la marge n'est pas prise en compte => problème avec group_by
-            Solution = faire une jointure avec un set de clés (peut contenir tout, partiellement, voire aucunes des véritables clés de la variable)
-            Se le budget était en (epsilon, delta) alors pas de seuil
+        - Le margin n'est pas prise en compte
+        → Problème potentiel avec group_by
+        → Solution : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
     """
     def execute(self):
         query = self.context.query()
@@ -92,29 +78,37 @@ class count_dp(request_dp):
 
 class sum_dp(request_dp):
     """
-    Somme :
-        - Sensibilité = à la privacy_unit * max(abs(L), abs(U)) ou (privacy_unit // 2) * (U - L) si marge variable connu
-        - Requête possible via epsilon (Laplace) ou rho (Gaussian) selon les formules définies
-        - Obligé de définir un dp.polars.Margin(max_partition_length=?)
+    Somme différentiellement privé - Notes de la fonction d'OpenDP
 
-        - Si group_by : a mettre les clés de la variables dans un margin sinon erreur
-            Autre solution : on effectue en même temps une requete de comptage en (epsilon, delta) via le seuil
-            Autre solution : jointure
+    - La sensibilité dépend de la `privacy_unit` :
+        - Cas général : sensibilité = privacy_unit * max(abs(L), abs(U))
+        - Si une marge sur la variable est connue : sensibilité = (privacy_unit // 2) * (U - L)
 
-        - Si filter : la marge n'est pas prise en compte => sensibilité (formule avec max) et problème avec group_by
-            Solution (partielle car pas sensibilité) = faire une jointure avec un set de clés 
-                (peut contenir tout, partiellement, voire aucunes des véritables clés de la variable)
+    - Nécéssaire :
+        - Définir dans la marge `dp.polars.Margin(max_partition_length=?)`
+        - Définir un `.fill_null(?)` dans la chaîne
+        - Définir un `.fill_nan(?)` dans la chaîne si et seulement si entrée de type float
 
-        Attention privacy unit=1 si marge connu sur le dataset et seulement les clés connus (mais pas les marges dessus) sinon erreur
+    - La requête peut se faire en (epsilon)-DP (Laplace) ou (rho)-zCDP (Gaussien)
 
-        - Si entrée type float :
-            - Si privacy unit = 1 -> problème dans le scale qui est ressort un résultat dépendant de max_partition_length, de valeur très faible sauf dans le cas au dessus
-            - Si group_by :
-                    OpenDPException:
-                        MakeTransformation("max_num_partitions must be known when the metric is not sensitive to ordering (SymmetricDistance)")
-                        Predicate in binary search always raises an exception. This exception is raised when the predicate is evaluated at 0.0.
+    - Si group_by :
+        - L'argument keys doit être inclus dans un margin sinon requête jointe len (epsilon, delta)-DP avec seuil
+        - Si entrée type float, nécessité de définir `max_num_partitions` dans le margin (must be known when the metric is not sensitive to ordering (SymmetricDistance))
+        → Autre solution : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé) et pas de max_num_partitions
 
-                Il faut forcement définir max_num_partitions dans le bon margin sauf si on faire la jointure après
+    - Si filter :
+        - Le margin n'est pas prise en compte
+        → Problème potentiel avec group_by et formule maximum pour sensibilité
+        → Solution (règle pas sensibilité) : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
+
+    - Remarques privacy unit :
+        - Peut être fixée à 1 si :
+            - La marge (lengths) est connue sur l'ensemble du dataset
+            - Group_by nécessaire avec clés connues (mais pas lengths)
+            - Entrée de type int (si float, scale suspicieusement faible)
+        - Sinon, une erreur est levée.
     """
     def execute(self):
         l, u = self.bounds
@@ -143,28 +137,36 @@ class sum_dp(request_dp):
 
 class mean_dp(request_dp):
     """
-    Moyenne :
-        - Sensibilité = cas de la somme et du comptage
-        - Requête possible via epsilon (Laplace) ou rho (Gaussian) selon les formules définies
-        - Obligé de définir un dp.polars.Margin(max_partition_length=?)
+    Moyenne différentiellement privé - Notes de la fonction d'OpenDP
 
-        - Si group_by : a mettre les clés de la variables dans un margin sinon erreur
-            Attention : on effectue en même temps une requete de comptage en (epsilon, delta) via le seuil ne MARCHE PAS
-            Autre solution : jointure
+    - Il s'agit de l'utilisation des deux dernières fonctions avec un budget divisé équitablement
 
-        - Si filter : la marge n'est pas prise en compte => sensibilité (formule avec max) et problème avec group_by
-            Solution = faire une jointure avec un set de clés (peut contenir tout, partiellement, voire aucunes des véritables clés de la variable)
+    - La sensibilité : voir cas comptage et somme
 
-        Attention privacy unit=1 si marge connu sur le dataset et seulement les clés connus (mais pas les marges dessus) sinon erreur
+    - Nécéssaire :
+        - Définir dans la marge `dp.polars.Margin(max_partition_length=?)`
+        - Définir un `.fill_null(?)` dans la chaîne
+        - Définir un `.fill_nan(?)` dans la chaîne si et seulement si entrée de type float
 
-        - Si entrée type float :
-            - Si privacy unit = 1 -> problème dans le scale qui est ressort un résultat dépendant de max_partition_length, de valeur très faible sauf dans le cas au dessus
-            - Si group_by :
-                    OpenDPException:
-                        MakeTransformation("max_num_partitions must be known when the metric is not sensitive to ordering (SymmetricDistance)")
-                        Predicate in binary search always raises an exception. This exception is raised when the predicate is evaluated at 0.0.
+    - La requête peut se faire en (epsilon)-DP (Laplace) ou (rho)-zCDP (Gaussien)
 
-                Il faut forcement définir max_num_partitions dans le bon margin sauf si on faire la jointure après
+    - Si group_by :
+        - L'argument keys doit être inclus dans un margin
+        - Si entrée type float, nécessité de définir `max_num_partitions` dans le margin (must be known when the metric is not sensitive to ordering (SymmetricDistance))
+        → Autre solution : jointure avec un ensemble de clés (complet ou partiel)
+
+    - Si filter :
+        - Le margin n'est pas prise en compte
+        → Problème potentiel avec group_by et formule maximum pour sensibilité
+        → Solution (règle pas sensibilité) : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
+
+    - Remarques privacy unit :
+        - Peut être fixée à 1 si :
+            - La marge (lengths) est connue sur l'ensemble du dataset
+            - Group_by nécessaire avec clés connues (mais pas lengths)
+            - Entrée de type int (si float, scale suspicieusement faible)
+        - Sinon, une erreur est levée.
     """
     def execute(self):
         l, u = self.bounds
@@ -193,25 +195,37 @@ class mean_dp(request_dp):
 
 class quantile_dp(request_dp):
     """
-    Quantile :
-        - Sensibilité proportionnelle à la privacy_unit
-        - Requête possible via epsilon (Laplace) seulement
-        - Obligé de définir un dp.polars.Margin(max_partition_length=?)
+    Quantile différentiellement privé - Notes de la fonction d'OpenDP
 
-        - Si marge dataset connu, impossible privacy unit = 1 et la sensibilité proportionnelle à (privacy_unit // 2) * 4 * sensibilité de base (conjecture)
+    - Sensibilité proportionnelle à la privacy_unit mais pas de formule claire
 
-        - Si group_by :
-            - Mettre les clés de la variables dans un margin sinon requête en (epsilon, delta) via un seuil ou bien jointure
-            - Plus on augmente privacy unit, plus la sensibilité augmente rapidement (2, 8, 18, 32, 40, 48, 56) indépendamment des marges
+    - Nécéssaire :
+        - Définir dans la marge `dp.polars.Margin(max_partition_length=?)`
+        - Définir un `.fill_null(?)` dans la chaîne
+        - Définir un `.fill_nan(?)` dans la chaîne si et seulement si entrée de type float
+        - Définir une liste de candidats, par ordre croissant, et de valeurs entières distinctes
 
-        - Si ordre du quantile différent de 0, 0.5 et 1 alors résultat apparement très bruité
+    - La requête se fait en (epsilon)-DP (Laplace)
 
-        - Si filter : la marge n'est pas prise en compte => problème avec group_by
-            Solution = faire une jointure avec un set de clés (peut contenir tout, partiellement, voire aucunes des véritables clés de la variable)
-            Se le budget était en (epsilon, delta) alors pas de seuil
+    - Si marge du dataset connu, impossible privacy unit = 1 et la sensibilité proportionnelle à (privacy_unit // 2) * 4 * sensibilité de base (conjecture)
 
-        Dans le meilleur des cas, scale des quartiles (0, 0.25, 0.5, 0.75, 1) en (2, 6, 2, 6, 2).
-        Le reste c'est trop bruité
+    - Si group_by :
+        - L'argument keys doit être inclus dans un margin sinon requête jointe len (epsilon, delta)-DP avec seuil
+        - Si entrée type float, nécessité de définir `max_num_partitions` dans le margin (must be known when the metric is not sensitive to ordering (SymmetricDistance))
+        → Autre solution : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé) et pas de max_num_partitions
+        - Plus on augmente privacy unit, plus la sensibilité augmente rapidement (2, 8, 18, 32, 40, 48, 56) indépendamment des marges
+
+    - Si filter :
+        - Le margin n'est pas prise en compte
+        → Problème potentiel avec group_by et formule maximum pour sensibilité
+        → Solution (règle pas sensibilité) : jointure avec un ensemble de clés (complet ou partiel)
+            → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
+
+    - Remarques ordres des quantiles :
+        - Si ordre des quantiles différents de 0, 0.25, 0.5, 0.75 ou 1:
+            - Résultat extrêmement bruité
+        - Sinon, dans le meilleur des cas, scale des quartiles (0, 0.25, 0.5, 0.75, 1) en (2, 6, 2, 6, 2)
     """
     def __init__(self, context, key_values, variable, candidats, by=None, bounds=None, filtre=None, alpha=None):
         super().__init__(context, key_values, by, variable, bounds, filtre)

@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 from app.initialisation import init_session_defaults, update_context
 from fonctions import eps_from_rho_delta
-from process_tools import process_request_dp
+from process_tools import process_request_dp, process_request
 
 init_session_defaults()
 
@@ -16,7 +16,7 @@ def format_scientifique(val, precision=2):
 def format_scale(scale):
     # Si c'est un scalaire
     if np.isscalar(scale):
-        return f"{scale:.1f}" if abs(scale) < 1000 else f"{scale:.1e}"
+        return f"{scale:.1f}"
 
     # Sinon, liste de valeurs
     return "(" + ", ".join(f"{s:.1f}" if abs(s) < 1000 else f"{s:.1e}" for s in scale) + ")"
@@ -142,10 +142,24 @@ for key in keys:
     with col:
         st.markdown(f"##### 🔐 `{key}`")
         resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
-        print(1)
         scale = resultat_dp.summarize(alpha=0.05)["scale"]
-        st.metric(label="Ecart type du bruit injecté", value=format_scale(scale))
-        st.caption(f"Requête {processed + 1} sur {total}")
+
+        if req_type == "sum":
+            resultat = process_request(st.session_state.df.lazy(), req)
+            liste = [scale[0]/resultat["sum"].max(), scale[0]/resultat["sum"].min()]
+            liste = liste[0] if liste[0] == liste[1] else liste
+            st.metric(label="Coefficient de variation = écart-type somme / vrai valeur", value=format_scale(100*liste))
+
+        if req_type == "mean":
+            resultat = process_request(st.session_state.df.lazy(), req)
+            print(resultat["mean"].min())
+            liste = [scale[0]/resultat["mean"].max(), scale[0]/resultat["mean"].min()]
+            liste = liste[0] if liste[0] == liste[1] else liste
+            st.metric(label="Coefficient de variation = écart-type somme / vrai valeur", value=format_scale(liste))
+            st.caption(f"Requête {processed + 1} sur {total}")
+        else:
+            st.metric(label="Ecart type du bruit injecté", value=format_scale(scale))
+            st.caption(f"Requête {processed + 1} sur {total}")
 
     processed += 1
     progress_bar.progress(int(100 * processed / total), text=f"Progression : {processed}/{total}")
