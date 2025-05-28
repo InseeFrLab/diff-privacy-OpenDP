@@ -4,6 +4,7 @@ import numpy as np
 import polars as pl
 from scipy.optimize import fsolve
 
+
 def rho_from_eps_delta(epsilon, delta):
     if not (0 < delta < 1):
         raise ValueError("delta must be in (0, 1)")
