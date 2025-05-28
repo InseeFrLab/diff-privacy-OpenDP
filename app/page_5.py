@@ -1,7 +1,7 @@
 import streamlit as st
 from app.initialisation import init_session_defaults, update_context
-from fonctions import construire_dataframe_comparatif
-from process_tools import process_request, process_request_dp
+from src.fonctions import construire_dataframe_comparatif
+from src.process_tools import process_request, process_request_dp
 import opendp.prelude as dp
 import numpy as np
 import plotly.express as px

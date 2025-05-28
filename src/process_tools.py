@@ -1,6 +1,6 @@
 import polars as pl
-from request_class import count_dp, mean_dp, sum_dp, quantile_dp
-from fonctions import parse_filter_string
+from src.request_class import count_dp, mean_dp, sum_dp, quantile_dp
+from src.fonctions import parse_filter_string
 
 
 def process_request_dp(context_rho, context_eps, key_values, req):

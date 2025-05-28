@@ -2,8 +2,8 @@ import json
 import polars as pl
 import opendp.prelude as dp
 import numpy as np
-from fonctions import rho_from_eps_delta, eps_from_rho_delta
-from process_tools import process_request, process_request_dp
+from src.fonctions import rho_from_eps_delta, eps_from_rho_delta
+from src.process_tools import process_request, process_request_dp
 
 dp.enable_features("contrib")
 

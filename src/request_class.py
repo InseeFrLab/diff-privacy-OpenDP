@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import opendp.prelude as dp
 import polars as pl
-from fonctions import parse_filter_string
+from src.fonctions import parse_filter_string
 
 
 # Classe mère

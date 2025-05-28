@@ -1,8 +1,8 @@
 import streamlit as st
 import numpy as np
 from app.initialisation import init_session_defaults, update_context
-from fonctions import eps_from_rho_delta
-from process_tools import process_request_dp, process_request
+from src.fonctions import eps_from_rho_delta
+from src.process_tools import process_request_dp, process_request
 
 init_session_defaults()
 
@@ -36,7 +36,6 @@ with st.container():
 
     col3.metric("Budget total en ρ", f"{rho_depense_init + rho_budget:.4f}")
     col4.metric("Budget total en (ε, δ)", f"({epsilon:.4f}, {format_scientifique(delta)})")
-# Marqueur de fin
 st.markdown("---")
 
 st.markdown("### 🔧 Répartition du budget ρ par requête")
@@ -75,14 +74,6 @@ if total_raw == 0:
     poids_normalises = {i: 0.0 for i in poids_raw}
 else:
     poids_normalises = {i: v / total_raw for i, v in poids_raw.items()}
-
-eps_depense = 0
-
-somme_poids_quantile = sum(
-    poids_normalises[clef]
-    for clef, req in requetes.items()
-    if req["type"] == "quantile"
-)
 
 df = st.session_state.df
 context_param = st.session_state.context_param
@@ -148,7 +139,7 @@ for key in keys:
             resultat = process_request(st.session_state.df.lazy(), req)
             liste = [scale[0]/resultat["sum"].max(), scale[0]/resultat["sum"].min()]
             liste = liste[0] if liste[0] == liste[1] else liste
-            st.metric(label="Coefficient de variation = écart-type somme / vrai valeur", value=format_scale(100*liste))
+            st.metric(label="Coefficient de variation", value=format_scale(100*liste))
 
         if req_type == "mean":
             resultat = process_request(st.session_state.df.lazy(), req)
