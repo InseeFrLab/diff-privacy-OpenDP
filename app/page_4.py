@@ -1,16 +1,12 @@
 import streamlit as st
 import numpy as np
 from app.initialisation import init_session_defaults, update_context
-from src.fonctions import eps_from_rho_delta
+from src.fonctions import eps_from_rho_delta, format_scientifique, add_bar
 from src.process_tools import process_request_dp, process_request
+from plotly.subplots import make_subplots
+import pandas as pd
 
 init_session_defaults()
-
-
-def format_scientifique(val, precision=2):
-    base, exposant = f"{val:.{precision}e}".split("e")
-    exposant = int(exposant)  # conversion propre de l'exposant
-    return f"10^{exposant}"
 
 
 def format_scale(scale):
@@ -23,7 +19,8 @@ def format_scale(scale):
 
 
 tab1, tab2 = st.tabs(["Budget", "Rappel requêtes"])
-with tab1 :
+
+with tab1:
     # Titre
     st.subheader("🔐 Paramètres de confidentialité")
     with st.container():
@@ -117,13 +114,10 @@ with tab1 :
     count_rho = -1
     count_quantile = -1
 
-    import pandas as pd
-
     resultats_count = []
     resultats_sum = []
     resultats_mean = []
     resultats_quantile = []
-
 
     # Affichage dans l'ordre des requêtes, mais dans la colonne du type
     for key in keys:
@@ -172,9 +166,10 @@ with tab1 :
         processed += 1
         progress_bar.progress(int(100 * processed / total), text=f"Progression : {processed}/{total}")
 
-
-    from plotly.subplots import make_subplots
-    import plotly.graph_objects as go
+    df_count = pd.DataFrame(resultats_count)
+    df_sum = pd.DataFrame(resultats_sum)
+    df_mean = pd.DataFrame(resultats_mean)
+    df_quantile = pd.DataFrame(resultats_quantile)
 
     # Création de la figure en 2x2
     fig = make_subplots(
@@ -188,52 +183,6 @@ with tab1 :
         vertical_spacing=0.15,
         horizontal_spacing=0.1
     )
-
-    # Fonction de création de barplot
-    def add_bar(fig, df, row, col, x_col, y_col, color, error=None):
-        if not df.empty:
-            bar_args = dict(
-                x=df[x_col],
-                y=df[y_col],
-                marker=dict(
-                    color=color,
-                    line=dict(width=0),
-                    opacity=0.85, 
-                    cornerradius="15%"
-                ),
-                text=[
-                    f"{v:.2f}" if isinstance(v, (int, float)) else str(v)
-                    for v in df[y_col]
-                ],
-                textposition="auto"
-            )
-            # Ajouter error_y uniquement si error est fourni
-            if error:
-                bar_args["error_y"] = dict(type='data', array=df[error])
-
-            fig.add_trace(
-                go.Bar(**bar_args),
-                row=row,
-                col=col
-            )
-        else:
-            fig.add_trace(
-                go.Scatter(
-                    x=[0],
-                    y=[0],
-                    mode="text",
-                    text=["Aucune donnée"],
-                    textposition="middle center",
-                    showlegend=False
-                ),
-                row=row,
-                col=col
-            )
-
-    df_count = pd.DataFrame(resultats_count).dropna()
-    df_sum = pd.DataFrame(resultats_sum).dropna()
-    df_mean = pd.DataFrame(resultats_mean).dropna()
-    df_quantile = pd.DataFrame(resultats_quantile).dropna()
 
     # Ajout des barplots dans la figure
     add_bar(fig, df_count, row=1, col=1, x_col="clé", y_col="écart_type", color="#636EFA")
@@ -253,12 +202,8 @@ with tab1 :
         font=dict(size=14)
     )
 
-    # Rotation des labels en x
-    fig.update_xaxes(tickangle=-30)
-
     # Affichage dans Streamlit
     st.plotly_chart(fig, use_container_width=True)
-
 
     # --- Sauvegarde dans la session pour accès inter-pages ---
     st.session_state.rho_budget = rho_budget
@@ -270,10 +215,20 @@ with tab2:
 
             # Colonne 1 : infos principales
             with col1:
-                st.markdown(f"**Type :** `{req['type']}`")
                 st.markdown(f"**Variable :** `{req.get('variable', '—')}`")
                 if req.get("alpha") is not None:
                     st.markdown(f"**Alpha :** `{req['alpha']}`")
+                bounds = req.get("bounds")
+                if bounds:
+                    st.markdown(f"**Bornes :** min=`{bounds[0]}`, max=`{bounds[1]}`")
+                else:
+                    st.markdown("**Bornes :** `—`")
+
+            # Colonne 2 : conditions
+            with col2:
+                st.markdown(f"**Filtre :** `{req.get('filtre') or '—'}`")
+                by = req.get("by")
+                st.markdown(f"**Par :** `{', '.join(by) if by else '—'}`")
 
                 if req.get("candidats") is not None:
                     cands = req["candidats"]
@@ -282,15 +237,3 @@ with tab2:
                         st.markdown(f"**Candidats (liste) :** `{vals}`")
                     else:
                         st.markdown(f"**Candidats (range) :** min=`{cands['min']}`, max=`{cands['max']}`, step=`{cands['step']}`")
-
-            # Colonne 2 : conditions
-            with col2:
-                st.markdown(f"**Filtre :** `{req.get('filtre') or '—'}`")
-                by = req.get("by")
-                st.markdown(f"**Par :** `{', '.join(by) if by else '—'}`")
-
-                bounds = req.get("bounds")
-                if bounds:
-                    st.markdown(f"**Bornes :** min=`{bounds[0]}`, max=`{bounds[1]}`")
-                else:
-                    st.markdown("**Bornes :** `—`")

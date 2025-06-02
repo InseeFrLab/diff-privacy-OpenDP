@@ -3,6 +3,7 @@ import operator
 import numpy as np
 import polars as pl
 from scipy.optimize import fsolve
+import plotly.graph_objects as go
 
 
 def rho_from_eps_delta(epsilon, delta):
@@ -84,6 +85,12 @@ def parse_filter_string(filter_str: str) -> pl.Expr:
             expr = expr | next_expr
 
     return expr
+
+
+def format_scientifique(val, precision=2):
+    base, exposant = f"{val:.{precision}e}".split("e")
+    exposant = int(exposant)  # conversion propre de l'exposant
+    return f"10^{exposant}"
 
 
 def construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes):
@@ -190,3 +197,45 @@ def manual_quantile_score(data, candidats, alpha, et_si=False):
         scores.append(abs(score))
 
     return np.array(scores), max(alpha_num, alpha_denum - alpha_num)
+
+
+# Fonction de création de barplot
+def add_bar(fig, df, row, col, x_col, y_col, color, error=None):
+    if not df.empty:
+        bar_args = dict(
+            x=df[x_col],
+            y=df[y_col],
+            marker=dict(
+                color=color,
+                line=dict(width=0),
+                opacity=0.85, 
+                cornerradius="15%"
+            ),
+            text=[
+                f"{v:.2f}" if isinstance(v, (int, float)) else str(v)
+                for v in df[y_col]
+            ],
+            textposition="auto"
+        )
+        # Ajouter error_y uniquement si error est fourni
+        if error:
+            bar_args["error_y"] = dict(type='data', array=df[error])
+
+        fig.add_trace(
+            go.Bar(**bar_args),
+            row=row,
+            col=col
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[0],
+                mode="text",
+                text=["Aucune donnée"],
+                textposition="middle center",
+                showlegend=False
+            ),
+            row=row,
+            col=col
+        )
