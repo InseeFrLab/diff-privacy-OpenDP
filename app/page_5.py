@@ -6,6 +6,7 @@ import opendp.prelude as dp
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import polars as pl
 init_session_defaults()
 
 dp.enable_features("contrib")
@@ -46,8 +47,10 @@ for i, (key, req) in enumerate(requetes.items(), 1):
 
     try:
         # Résultat DP
-        resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
+        resultat_dp = process_request_dp(context_rho, context_eps, key_values, req).execute()
         df_result = resultat_dp.release().collect()
+        if req.get("type") == "mean":
+            df_result = df_result.with_columns(mean=pl.col.total / pl.col.len)
         if req.get("by") is not None:
             df_result = df_result.sort(by=req.get("by"))
             first_col = df_result.columns[0]

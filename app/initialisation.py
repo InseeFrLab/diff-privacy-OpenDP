@@ -80,4 +80,3 @@ def update_context(rho_budget, poids_requetes_rho, poids_requetes_quantile):
         )
 
     return context_rho, context_eps
-

@@ -23,7 +23,7 @@ def process_request_dp(context_rho, context_eps, key_values, req):
     if type_req not in mapping:
         raise ValueError(f"Type de requête non supporté : {type_req}")
 
-    return mapping[type_req]().execute()
+    return mapping[type_req]()
 
 
 def process_request(df: pl.LazyFrame, req: dict) -> pl.LazyFrame:
@@ -52,9 +52,15 @@ def process_request(df: pl.LazyFrame, req: dict) -> pl.LazyFrame:
 
     elif type_req == "mean":
         if by:
-            df = df.group_by(by).agg(pl.col(variable).mean().alias("mean"))
+            df = df.group_by(by).agg(
+                pl.col(variable).sum().alias("sum"),
+                pl.count().alias("count"),
+                pl.col(variable).mean().alias("mean"))
         else:
-            df = df.select(pl.col(variable).mean().alias("mean"))
+            df = df.select(
+                pl.col(variable).sum().alias("sum"),
+                pl.count().alias("count"),
+                pl.col(variable).mean().alias("mean"))
 
     elif type_req == "sum":
         if by:

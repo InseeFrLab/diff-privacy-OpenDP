@@ -161,3 +161,32 @@ def construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes):
                 })
 
     return pl.DataFrame(lignes)
+
+
+def manual_quantile_score(data, candidats, alpha, et_si=False):
+    if alpha == 0:
+        alpha_num, alpha_denum = 0, 1
+    elif alpha == 0.25:
+        alpha_num, alpha_denum = 1, 4
+    elif alpha == 0.5:
+        alpha_num, alpha_denum = 1, 2
+    elif alpha == 0.75:
+        alpha_num, alpha_denum = 3, 4
+    elif alpha == 1:
+        alpha_num, alpha_denum = 1, 1
+    else:
+        alpha_num = int(np.floor(alpha * 10_000))
+        alpha_denum = 10_000
+
+    if et_si:
+        alpha_num = int(np.floor(alpha * 10_000))
+        alpha_denum = 10_000
+
+    scores = []
+    for c in candidats:
+        n_less = np.sum(data < c)
+        n_equal = np.sum(data == c)
+        score = alpha_denum * n_less - alpha_num * (len(data) - n_equal)
+        scores.append(abs(score))
+
+    return np.array(scores), max(alpha_num, alpha_denum - alpha_num)

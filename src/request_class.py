@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 import opendp.prelude as dp
 import polars as pl
-from src.fonctions import parse_filter_string
+import numpy as np
+from src.fonctions import parse_filter_string, manual_quantile_score
+from scipy.stats import gumbel_r
 
 
 # Classe mère
@@ -29,6 +31,10 @@ class request_dp(ABC):
 
     @abstractmethod
     def execute(self):
+        pass
+
+    @abstractmethod
+    def precision(self):
         pass
 
 
@@ -59,7 +65,14 @@ class count_dp(request_dp):
             → Si budget en (epsilon, delta), aucun seuil n'est appliqué (pas delta dépensé)
     """
     def execute(self):
-        query = self.context.query()
+        query = self.context.query().with_columns(pl.lit(1).alias("colonne_comptage"))
+
+        expr = (
+            pl.col("colonne_comptage")
+            .fill_null(1)
+            .dp.sum((1, 1))
+            .alias("count")
+        )
 
         if self.filtre is not None:
             query = query.filter(parse_filter_string(self.filtre))
@@ -67,13 +80,16 @@ class count_dp(request_dp):
         if self.by is not None:
             query = (
                 query.group_by(self.by)
-                .agg(dp.len().alias("count"))
+                .agg(expr)
                 .join(self.generate_public_keys(by_keys=self.by), on=self.by, how="right")
             )
         else:
-            query = query.select(dp.len().alias("count"))
+            query = query.select(expr)
 
         return query
+
+    def precision(self, alpha=0.05):
+        return self.execute().summarize(alpha=alpha)
 
 
 class sum_dp(request_dp):
@@ -134,6 +150,9 @@ class sum_dp(request_dp):
 
         return query
 
+    def precision(self, alpha=0.05):
+        return self.execute().summarize(alpha=alpha)
+
 
 class mean_dp(request_dp):
     """
@@ -174,8 +193,12 @@ class mean_dp(request_dp):
         expr = (
             pl.col(self.variable)
             .fill_null(0)  # .fill_nan(0) à ajouter si float (et seulement si ...)
-            .dp.mean(bounds=(l, u))
-            .alias("mean")
+            .dp.sum(bounds=(l, u))
+            .alias("total"),
+            pl.col(self.variable)
+            .fill_null(1)  # .fill_nan(1) à ajouter si float (et seulement si ...)
+            .dp.sum(bounds=(1, 1))
+            .alias("len")
         )
 
         if self.filtre is not None:
@@ -191,6 +214,9 @@ class mean_dp(request_dp):
             query = query.select(expr)
 
         return query
+
+    def precision(self, alpha=0.05):
+        return self.execute().summarize(alpha=alpha)
 
 
 class quantile_dp(request_dp):
@@ -268,3 +294,21 @@ class quantile_dp(request_dp):
             query = query.select(*aggs)
 
         return query
+
+    def precision(self, data, epsilon):
+        scores, sensi = manual_quantile_score(data[self.variable].to_numpy(), self.candidats, alpha=self.list_alpha[0], et_si=True)
+        low_q, high_q = gumbel_r.ppf([0.005, 0.995], loc=0, scale=2 * sensi / epsilon)
+
+        lower = scores + low_q
+        upper = scores + high_q
+
+        # Trouver l’indice du score minimal
+        min_idx = np.argmin(scores)
+        min_lower = lower[min_idx]
+        min_upper = upper[min_idx]
+
+        count = 0
+        for l, u in zip(lower, upper):
+            if not (u < min_lower or l > min_upper):
+                count += 1
+        return count
