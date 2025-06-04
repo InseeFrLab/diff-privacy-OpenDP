@@ -4,6 +4,8 @@ import numpy as np
 import polars as pl
 from scipy.optimize import fsolve
 import plotly.graph_objects as go
+import plotly.colors as pc
+import pandas as pd
 
 
 def rho_from_eps_delta(epsilon, delta):
@@ -139,7 +141,7 @@ def construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes):
                         "valeur_réelle": val_reelle,
                         "valeur_DP": val_dp,
                         "écart_absolu": abs(val_reelle - val_dp) if val_reelle is not None and val_dp is not None else None,
-                        "écart_relatif": abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
+                        "écart_relatif": 100 * abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
                         "scale": scales if len(scales) > 1 else [scales[0]],
                     })
 
@@ -163,7 +165,7 @@ def construire_dataframe_comparatif(resultats_reels, resultats_dp, requetes):
                     "valeur_réelle": val_reelle,
                     "valeur_DP": val_dp,
                     "écart_absolu": abs(val_reelle - val_dp) if val_reelle is not None and val_dp is not None else None,
-                    "écart_relatif": abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
+                    "écart_relatif": 100*abs(val_reelle - val_dp) / abs(val_reelle) if val_reelle not in (0, None) and val_dp is not None else None,
                     "scale": scales if len(scales) > 1 else [scales[0]],
                 })
 
@@ -200,7 +202,7 @@ def manual_quantile_score(data, candidats, alpha, et_si=False):
 
 
 # Fonction de création de barplot
-def add_bar(fig, df, row, col, x_col, y_col, color, error=None):
+def add_bar(fig, df, row, col, x_col, y_col, color):
     if not df.empty:
         bar_args = dict(
             x=df[x_col],
@@ -215,14 +217,74 @@ def add_bar(fig, df, row, col, x_col, y_col, color, error=None):
                 f"{v:.2f}" if isinstance(v, (int, float)) else str(v)
                 for v in df[y_col]
             ],
-            textposition="auto"
+            hovertemplate=(
+                f"<b>%{{text}}</b>"
+                + (f"<br>{x_col}: %{{x:.2f}}" if pd.api.types.is_numeric_dtype(df[x_col]) else f"<br>{x_col}: %{{x}}")
+                + (f"<br>{y_col}: %{{y:.2f}}" if pd.api.types.is_numeric_dtype(df[y_col]) else f"<br>{y_col}: %{{y}}")
+                + "<extra></extra>"
+            ),
+            textposition="auto",
+            textfont=dict(color="white")
         )
-        # Ajouter error_y uniquement si error est fourni
-        if error:
-            bar_args["error_y"] = dict(type='data', array=df[error])
 
         fig.add_trace(
             go.Bar(**bar_args),
+            row=row,
+            col=col
+        )
+
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[0],
+                mode="text",
+                text=["Aucune donnée"],
+                textposition="middle center",
+                showlegend=False
+            ),
+            row=row,
+            col=col
+        )
+
+
+def add_scatter(fig, df, row, col, x_col, y_col, size_col=None):
+    if not df.empty:
+        # Génère une couleur unique pour chaque 'clé'
+        unique_keys = df["requête"].unique()
+        color_palette = pc.qualitative.Plotly
+        color_map = {k: color_palette[i % len(color_palette)] for i, k in enumerate(unique_keys)}
+
+        # Convertir les tailles en float si demandé
+        sizes = (
+            df[size_col].astype(float).to_numpy()
+            if size_col else
+            None
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=df[x_col],
+                y=df[y_col],
+                mode="markers",
+                marker=dict(
+                    size=sizes if size_col else 10,
+                    sizemode="area",
+                    sizeref=2. * max(sizes) / (40.**2) if size_col else 1,
+                    sizemin=5,
+                    color=[color_map[k] for k in df["requête"]],
+                    opacity=0.8,
+                    line=dict(width=1, color='white')
+                ),
+                text=df["requête"],
+                hovertemplate=(
+                    f"<b>%{{text}}</b>"
+                    + (f"<br>{x_col}: %{{x:.2f}}" if pd.api.types.is_numeric_dtype(df[x_col]) else f"<br>{x_col}: %{{x}}")
+                    + (f"<br>{y_col}: %{{y:.2f}}" if pd.api.types.is_numeric_dtype(df[y_col]) else f"<br>{y_col}: %{{y}}")
+                    + (f"<br>{size_col}: %{{marker.size:.2f}}" if size_col and size_col != x_col and size_col != y_col else "")
+                    + "<extra></extra>"
+                )
+            ),
             row=row,
             col=col
         )

@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from app.initialisation import init_session_defaults, update_context
-from src.fonctions import eps_from_rho_delta, format_scientifique, add_bar
+from src.fonctions import eps_from_rho_delta, format_scientifique, add_bar, add_scatter
 from src.process_tools import process_request_dp, process_request
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -138,37 +138,40 @@ with tab1:
 
         if req_type == "count":
             scale = resultat_dp.precision()["scale"][0]
-            resultats_count.append({"clé": key, "écart_type": scale})
+            resultats_count.append({"requête": key, "écart_type": scale})
 
         elif req_type == "sum":
             scale = resultat_dp.precision()["scale"]
             resultat = process_request(st.session_state.df.lazy(), req)
-            cv_min = scale[0]/resultat["sum"].max()
-            cv_max = scale[0]/resultat["sum"].min()
-            resultats_sum.append({"clé": key, "cv (%)": 100 * (cv_max + cv_min)/2, "error (%)": 100 * (cv_max - cv_min)/2})
+            list_cv = 100 * scale[0]/resultat["sum"]
+            resultats_sum.append({"requête": key, "cv (%)": list_cv})
 
         elif req_type == "mean":
             scale_tot, scale_len = resultat_dp.precision()["scale"]
             resultat = process_request(st.session_state.df.lazy(), req)
-            cv_tot_min, cv_tot_max = scale_tot / resultat["sum"].max(), scale_tot / resultat["sum"].min()
-            cv_len_min, cv_len_max = scale_len / resultat["count"].max(), scale_len / resultat["count"].min()
-            cv_min = np.sqrt(cv_tot_min**2 + cv_len_min**2)
-            cv_max = np.sqrt(cv_tot_max**2 + cv_len_max**2)
-            resultats_mean.append({"clé": key, "cv (%)": 100 * (cv_max + cv_min)/2, "error (%)": 100 * (cv_max - cv_min)/2})
+            list_cv_tot = scale_tot/resultat["sum"]
+            list_cv_len = scale_len/resultat["count"]
+            list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
+            resultats_mean.append({"requête": key, "cv (%)": list_cv, "cv_tot (%)": 100 * list_cv_tot, "cv_len (%)": 100 * list_cv_len})
 
         else:  # quantile
             nb_candidat = resultat_dp.precision(
                 data=st.session_state.df,
                 epsilon=np.sqrt(8 * rho_budget * sum(poids_requetes_quantile)) * poids_requetes_quantile[0]
             )
-            resultats_quantile.append({"clé": key, "candidats": nb_candidat})
+            resultats_quantile.append({"requête": key, "candidats": nb_candidat})
 
         processed += 1
         progress_bar.progress(int(100 * processed / total), text=f"Progression : {processed}/{total}")
 
     df_count = pd.DataFrame(resultats_count)
-    df_sum = pd.DataFrame(resultats_sum)
-    df_mean = pd.DataFrame(resultats_mean)
+
+    df = pd.DataFrame(resultats_mean)
+    df_mean = df.explode(["cv (%)", "cv_tot (%)", "cv_len (%)"]).reset_index(drop=True)
+
+    df = pd.DataFrame(resultats_sum)
+    df_sum = df.explode("cv (%)").reset_index(drop=True)
+
     df_quantile = pd.DataFrame(resultats_quantile)
 
     # Création de la figure en 2x2
@@ -185,10 +188,20 @@ with tab1:
     )
 
     # Ajout des barplots dans la figure
-    add_bar(fig, df_count, row=1, col=1, x_col="clé", y_col="écart_type", color="#636EFA")
-    add_bar(fig, df_quantile, row=1, col=2, x_col="clé", y_col="candidats", color="#AB63FA")
-    add_bar(fig, df_sum, row=2, col=1, x_col="clé", y_col="cv (%)", color="#EF553B", error="error (%)")
-    add_bar(fig, df_mean, row=2, col=2, x_col="clé", y_col="cv (%)", color="#00CC96", error="error (%)")
+    add_bar(fig, df_count, row=1, col=1, x_col="requête", y_col="écart_type", color="#636EFA")
+    add_bar(fig, df_quantile, row=1, col=2, x_col="requête", y_col="candidats", color="#AB63FA")
+
+    add_scatter(fig, df_sum, row=2, col=1, x_col="cv (%)", y_col="requête", size_col="cv (%)")
+    add_scatter(fig, df_mean, row=2, col=2, x_col="cv_tot (%)", y_col="cv_len (%)", size_col="cv (%)")
+
+    fig.update_yaxes(title_text="Écart type", row=1, col=1)
+
+    fig.update_yaxes(title_text="Nombre de candidats", row=1, col=2)
+
+    fig.update_xaxes(title_text="CV (%)", row=2, col=1)
+
+    fig.update_xaxes(title_text="CV total (%)", row=2, col=2)
+    fig.update_yaxes(title_text="CV comptage (%)", row=2, col=2)
 
     # Mise en forme générale
     fig.update_layout(
