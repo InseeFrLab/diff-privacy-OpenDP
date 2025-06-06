@@ -6,6 +6,53 @@ from scipy.optimize import fsolve
 import plotly.graph_objects as go
 import plotly.colors as pc
 import pandas as pd
+from shiny import ui
+
+def make_card_body(req):
+    parts = []
+
+    fields = [
+        ("variable", "📌 Variable", lambda v: f"`{v}`"),
+        ("bounds", "🎯 Bornes", lambda v: f"`[{v[0]}, {v[1]}]`" if isinstance(v, list) and len(v) == 2 else "—"),
+        ("by", "🧷 Group by", lambda v: f"`{', '.join(v)}`"),
+        ("filtre", "🧮 Filtre", lambda v: f"`{v}`"),
+        ("alpha", "📈 Alpha", lambda v: f"`{v}`"),
+    ]
+
+    for key, label, formatter in fields:
+        val = req.get(key)
+        if val is not None and val != "" and val != []:
+            parts.append(ui.p(f"{label} : {formatter(val)}"))
+
+    return ui.card_body(*parts)
+
+def manual_quantile_score(data, candidats, alpha, et_si=False):
+    if alpha == 0:
+        alpha_num, alpha_denum = 0, 1
+    elif alpha == 0.25:
+        alpha_num, alpha_denum = 1, 4
+    elif alpha == 0.5:
+        alpha_num, alpha_denum = 1, 2
+    elif alpha == 0.75:
+        alpha_num, alpha_denum = 3, 4
+    elif alpha == 1:
+        alpha_num, alpha_denum = 1, 1
+    else:
+        alpha_num = int(np.floor(alpha * 10_000))
+        alpha_denum = 10_000
+
+    if et_si == True:
+        alpha_num = int(np.floor(alpha * 10_000))
+        alpha_denum = 10_000
+
+    scores = []
+    for c in candidats:
+        n_less = np.sum(data < c)
+        n_equal = np.sum(data == c)
+        score = alpha_denum * n_less - alpha_num * (len(data) - n_equal)
+        scores.append(abs(score))
+
+    return np.array(scores), max(alpha_num, alpha_denum - alpha_num)
 
 
 def rho_from_eps_delta(epsilon, delta):
@@ -30,7 +77,7 @@ def eps_from_rho_delta(rho, delta):
     epsilon_base = rho + 2 * np.sqrt(rho * np.log(1 / delta))
     y0 = rho + 1
     epsilon_small = fsolve(equation, y0, args=(rho, delta))[0]
-    print("Diff formule de base :", epsilon_base - epsilon_small)
+    # print("Diff formule de base :", epsilon_base - epsilon_small)
 
     return epsilon_small
 

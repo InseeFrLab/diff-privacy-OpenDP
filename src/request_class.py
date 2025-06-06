@@ -128,12 +128,15 @@ class sum_dp(request_dp):
     def execute(self):
         l, u = self.bounds
         query = self.context.query()
-        expr = (
-            pl.col(self.variable)
-            .fill_null(0)  # .fill_nan(0) à ajouter si float (et seulement si ...)
-            .dp.sum((l, u))
-            .alias("sum")
-        )
+
+        dtype = query.collect_schema().get(self.variable, None)
+        query = self.context.query()
+        expr = pl.col(self.variable).fill_null(0)
+
+        if dtype in [pl.Float32, pl.Float64]:
+            expr = expr.fill_nan(0)  # Ajout seulement pour les floats
+
+        expr = expr.dp.sum((l, u)).alias("sum")
 
         if self.filtre is not None:
             query = query.filter(parse_filter_string(self.filtre))
@@ -146,7 +149,6 @@ class sum_dp(request_dp):
             )
         else:
             query = query.select(expr)
-
         return query
 
     def precision(self, alpha=0.05):
@@ -189,15 +191,23 @@ class mean_dp(request_dp):
     def execute(self):
         l, u = self.bounds
         query = self.context.query()
+        dtype = query.collect_schema().get(self.variable)
+        query = self.context.query()
+        is_float = dtype in (pl.Float32, pl.Float64)
+
+        # Construction conditionnelle des expressions
+        col_var = pl.col(self.variable)
+
+        total_expr = col_var.fill_null(0)
+        len_expr = col_var.fill_null(1)
+
+        if is_float:
+            total_expr = total_expr.fill_nan(0)
+            len_expr = len_expr.fill_nan(1)
+
         expr = (
-            pl.col(self.variable)
-            .fill_null(0)  # .fill_nan(0) à ajouter si float (et seulement si ...)
-            .dp.sum(bounds=(l, u))
-            .alias("total"),
-            pl.col(self.variable)
-            .fill_null(1)  # .fill_nan(1) à ajouter si float (et seulement si ...)
-            .dp.sum(bounds=(1, 1))
-            .alias("len")
+            total_expr.dp.sum(bounds=(l, u)).alias("total"),
+            len_expr.dp.sum(bounds=(1, 1)).alias("len")
         )
 
         if self.filtre is not None:
@@ -295,7 +305,7 @@ class quantile_dp(request_dp):
         return query
 
     def precision(self, data, epsilon):
-        scores, sensi = manual_quantile_score(data[self.variable].to_numpy(), self.candidats, alpha=self.list_alpha[0], et_si=True)
+        scores, sensi = manual_quantile_score(data.collect()[self.variable].to_numpy(), self.candidats, alpha=self.list_alpha[0], et_si=True)
         low_q, high_q = gumbel_r.ppf([0.005, 0.995], loc=0, scale=2 * sensi / epsilon)
 
         lower = scores + low_q

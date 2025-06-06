@@ -2,65 +2,44 @@
 import json
 from shiny import App, ui, render, reactive
 import pandas as pd
+import polars as pl
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.stats import norm
 import seaborn as sns
 from shinywidgets import output_widget, render_widget
+from app.initialisation import update_context
+from src.process_tools import process_request_dp, process_request
+from src.fonctions import make_card_body, eps_from_rho_delta
+import opendp.prelude as dp
+from plots import (
+    create_histo_plot, create_fc_emp_plot,
+    create_score_plot, create_proba_plot,
+    create_barplot, create_scatterplot
+)
+
+dp.enable_features("contrib")
 
 # --- Etat de session réactif ---
 requetes = reactive.Value({})  # Dictionnaire des requêtes
 json_source = reactive.Value("")
 
 type_req = ["Comptage", "Total", "Moyenne", "Quantile"]
-
-def manual_quantile_score(data, candidats, alpha, et_si=False):
-    if alpha == 0:
-        alpha_num, alpha_denum = 0, 1
-    elif alpha == 0.25:
-        alpha_num, alpha_denum = 1, 4
-    elif alpha == 0.5:
-        alpha_num, alpha_denum = 1, 2
-    elif alpha == 0.75:
-        alpha_num, alpha_denum = 3, 4
-    elif alpha == 1:
-        alpha_num, alpha_denum = 1, 1
-    else:
-        alpha_num = int(np.floor(alpha * 10_000))
-        alpha_denum = 10_000
-
-    if et_si == True:
-        alpha_num = int(np.floor(alpha * 10_000))
-        alpha_denum = 10_000
-
-    scores = []
-    for c in candidats:
-        n_less = np.sum(data < c)
-        n_equal = np.sum(data == c)
-        score = alpha_denum * n_less - alpha_num * (len(data) - n_equal)
-        scores.append(abs(score))
-
-    return np.array(scores), max(alpha_num, alpha_denum - alpha_num)
+data_example = sns.load_dataset("penguins")
 
 
-def make_card_body(req):
-    parts = []
-
-    fields = [
-        ("variable", "📌 Variable", lambda v: f"`{v}`"),
-        ("bounds", "🎯 Bornes", lambda v: f"`[{v[0]}, {v[1]}]`" if isinstance(v, list) and len(v) == 2 else "—"),
-        ("by", "🧷 Group by", lambda v: f"`{', '.join(v)}`"),
-        ("filtre", "🧮 Filtre", lambda v: f"`{v}`"),
-        ("alpha", "📈 Alpha", lambda v: f"`{v}`"),
-    ]
-
-    for key, label, formatter in fields:
-        val = req.get(key)
-        if val is not None and val != "" and val != []:
-            parts.append(ui.p(f"{label} : {formatter(val)}"))
-
-    return ui.card_body(*parts)
+def make_sliders(filter_type: list[str], prefix: str):
+    sliders = []
+    priorite = {"Comptage": "2", "Total": "2", "Moyenne": "1", "Quantile": "3"}
+    for key, req in requetes().items():
+        if req["type"] in filter_type:
+            slider_id = f"{prefix}_{key}"
+            sliders.append(
+                ui.input_radio_buttons(slider_id, key,
+                    {"1": 1, "2": 2, "3": 3}, selected=priorite[req["type"]]
+                )
+            )
+    return sliders
 
 
 # 1. UI --------------------------------------
@@ -92,7 +71,7 @@ app_ui = (
                     ),
                     ui.card(
                         ui.card_header("Résumé statistique"),
-                        ui.output_ui("data_summary"),
+                        ui.output_data_frame("data_summary"),
                         full_screen=True,
                     ),
                 ),
@@ -248,7 +227,7 @@ app_ui = (
                     ui.div(
                         ui.layout_columns(
                             # Colonne 1 : texte explicatif
-                            ui.div( # $\textrm{score}(x, c, \alpha_{num}, \alpha_{den}) = -|\alpha_{den} \cdot \#(x < c) - \alpha_{num} \cdot (|x| - \#(x = c))|$
+                            ui.div(
                                 ui.HTML("""
                                     <div style='margin-top:20px; padding:10px; background-color:#f9f9f9; border-radius:12px;
                                                 font-family: "Raleway", "Garamond", sans-serif; font-size:16px; color:#333'>
@@ -323,9 +302,56 @@ app_ui = (
             ),
         ),
 
-        ui.nav_panel("Conception du budget", ui.h3("À compléter...")),
+        ui.nav_panel("Conception du budget",
+            ui.page_sidebar(
+                ui.sidebar(
+                    ui.h3("Répartition libre du budget"),
+                    ui.input_numeric("budget_total", "Budget total :", 0.2, min=0.1, max=1, step=0.01),
+                    position="right",
+                    bg="#f8f8f8"
+                ),
+
+                ui.panel_well(
+                    ui.h4("Répartition du budget pour les comptages"),
+                    ui.layout_columns(
+                        ui.output_ui("sliders_groupe_A"),        # Partie gauche
+                        ui.card(                                 # Partie droite (graphique Plotly)
+                            output_widget("plot_groupe_comptage"),
+                            full_screen=True
+                        ),
+                        col_widths=[4, 8]
+                    )
+                ),
+                ui.hr(),
+                ui.panel_well(
+                    ui.h4("Répartition du budget pour les totaux et les moyennes"),
+                    ui.layout_columns(
+                        ui.output_ui("sliders_groupe_B"),        # Partie gauche
+                        ui.card(                                 # Partie droite (graphique Plotly)
+                            output_widget("plot_groupe_total_moyenne"),
+                            full_screen=True
+                        ),
+                        col_widths=[4, 8]
+                    )
+                ),
+                ui.hr(),
+                ui.panel_well(
+                    ui.h4("Répartition du budget pour les quantiles"),
+                    ui.layout_columns(
+                        ui.output_ui("sliders_groupe_C"),        # Partie gauche
+                        ui.card(                                 # Partie droite (graphique Plotly)
+                            output_widget("plot_group_quantile"),
+                            full_screen=True
+                        ),
+                        col_widths=[4, 8]
+                    )
+                ),
+            ),
+        ),
 
         ui.nav_panel("Résultat DP", ui.h3("À compléter...")),
+
+        ui.nav_panel("Etat budget dataset", ui.h3("À compléter...")),
 
         ui.nav_panel("A propos", ui.h3("À compléter...")),
 
@@ -342,6 +368,149 @@ app_ui = (
 
 
 def server(input, output, session):
+
+    @output
+    @render.ui
+    @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
+    def sliders_groupe_A():
+        return ui.layout_columns(
+            *make_sliders(["Comptage"], "A"),
+            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+        )
+
+    @output
+    @render.ui
+    @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
+    def sliders_groupe_B():
+        return ui.layout_columns(
+            *make_sliders(["Total", "Moyenne"], "B"),
+            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+        )
+
+    @output
+    @render.ui
+    @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
+    def sliders_groupe_C():
+        return ui.layout_columns(
+            *make_sliders(["Quantile"], "C"),
+            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+        )
+
+    @render_widget
+    def plot_groupe_comptage():
+        resultats_count, _, _ = X()
+        df_count = pd.DataFrame(resultats_count)
+
+        return create_barplot(df_count, x_col="requête", y_col="écart_type")
+
+
+    @render_widget
+    def plot_groupe_total_moyenne():
+        _, resultats_mean_sum, _ = X()
+        df_mean_sum = pd.DataFrame(resultats_mean_sum)
+        df_mean_sum = df_mean_sum.explode("cv (%)").reset_index(drop=True)
+
+        return create_scatterplot(df_mean_sum, x_col="cv (%)", y_col="requête", size_col="cv (%)")
+
+    @render_widget
+    def plot_groupe_quantile():
+        _, _, resultats_quantile = X()
+        df_quantile = pd.DataFrame(resultats_quantile)
+
+        return create_barplot(df_quantile, x_col="requête", y_col="candidats")
+
+    @reactive.Calc
+    def X():
+        all_sliders = {}
+
+        for prefix, types in [("A", ["Comptage"]), ("B", ["Total", "Moyenne"]), ("C", ["Quantile"])]:
+            for key, req in requetes().items():
+                if req["type"] in types:
+                    slider_id = f"{prefix}_{key}"
+                    all_sliders[key] = slider_id
+
+        # Mapping des valeurs du slider vers poids
+        slider_to_weight = {1: 1, 2: 0.5, 3: 0.25}
+
+        # Appliquer le mapping
+        values = {
+            key: slider_to_weight.get(float(getattr(input, sid)()), 0)
+            for key, sid in all_sliders.items()
+        }
+        # Normalisation
+        total = sum(values.values())
+        poids_normalises = {i: v / total for i, v in values.items()} if total > 0 else {i: 0 for i in values}
+
+        poids_requetes_rho = [
+            poids_normalises[clef]
+            for clef, req in requetes().items()
+            if req["type"] != "quantile" and req["type"] != "Quantile"
+        ]
+
+        poids_requetes_quantile = [
+            poids_normalises[clef]
+            for clef, req in requetes().items()
+            if req["type"] == "quantile" or req["type"] == "Quantile"
+        ]
+
+        count_rho = -1
+        count_quantile = -1
+
+        resultats_count = []
+        resultats_sum_mean = []
+        resultats_quantile = []
+
+        # Affichage dans l'ordre des requêtes, mais dans la colonne du type
+        for key in requetes().keys():
+            req = requetes()[key]
+            req_type = req["type"]
+
+            if req_type != "quantile" and req_type != "Quantile":
+                count_rho += 1
+                poids_requetes_rho[0], poids_requetes_rho[count_rho] = poids_requetes_rho[count_rho], poids_requetes_rho[0]
+            else:
+                count_quantile += 1
+                poids_requetes_quantile[0], poids_requetes_quantile[count_quantile] = poids_requetes_quantile[count_quantile], poids_requetes_quantile[0]
+
+            context_param = {
+                "data": pl.from_pandas(dataset()).lazy(),
+                "privacy_unit": dp.unit_of(contributions=1),
+                "margins": [
+                    dp.polars.Margin(max_partition_length=10000)
+                ],
+            }
+
+            (context_rho, context_eps) = update_context(context_param, input.budget_total(), poids_requetes_rho, poids_requetes_quantile)
+
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+
+            if req_type == "count" or req_type == "Comptage":
+                scale = resultat_dp.precision()["scale"][0]
+                resultats_count.append({"requête": key, "écart_type": scale})
+
+            elif req_type == "sum" or req_type == "Total":
+                scale = resultat_dp.precision()["scale"]
+                resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
+                list_cv = 100 * scale[0]/resultat["sum"]
+                resultats_sum_mean.append({"requête": key, "cv (%)": list_cv})
+
+            elif req_type == "mean" or req_type == "Moyenne":
+                scale_tot, scale_len = resultat_dp.precision()["scale"]
+                resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
+                list_cv_tot = scale_tot/resultat["sum"]
+                list_cv_len = scale_len/resultat["count"]
+                list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
+                resultats_sum_mean.append({"requête": key, "cv (%)": list_cv})
+
+            else:  # quantile
+                nb_candidat = resultat_dp.precision(
+                    data=pl.from_pandas(dataset()).lazy(),
+                    epsilon=np.sqrt(8 * input.budget_total() * sum(poids_requetes_quantile)) * poids_requetes_quantile[0]
+                )
+                resultats_quantile.append({"requête": key, "candidats": nb_candidat})
+            
+        return resultats_count, resultats_sum_mean, resultats_quantile
+
 
     # Page 1 ----------------------------------
 
@@ -368,9 +537,13 @@ def server(input, output, session):
 
     # Afficher le résumé statistique
     @output
-    @render.ui
+    @render.data_frame
     def data_summary():
-        return ui.HTML(dataset().describe(include="all").to_html())
+        df = dataset().describe(include="all")
+        df = df.round(2)
+        df.insert(0, "Statistique", df.index)  # ajouter la colonne "Statistique"
+        df.reset_index(drop=True, inplace=True)
+        return df
 
     # Page 2 ----------------------------------
 
@@ -388,12 +561,20 @@ def server(input, output, session):
             "🧮 Quantitatives": {col: col for col in quantitative}
         }
 
+    @reactive.Calc
+    def key_values():
+        df = dataset()
+        qualitatif_cols = df.select_dtypes(include=["object", "category"]).columns
+        return {
+            col: sorted(df[col].dropna().unique().tolist())
+            for col in qualitatif_cols
+        }
+
     @reactive.Effect
     def update_variable_choices():
         # Met à jour dynamiquement les choix de la selectize input
         ui.update_selectize("variable", choices=variable_choices())
         ui.update_selectize("group_by", choices=variable_choices())
-        ui.update_selectize("delete_req", choices=list(requetes().keys()))
 
     @reactive.effect
     @reactive.event(input.request_input)
@@ -426,17 +607,22 @@ def server(input, output, session):
             i += 1
         new_id = f"req_{i}"
 
+        raw_min = input.borne_min()
+        raw_max = input.borne_max()
+
+        bounds = [float(raw_min), float(raw_max)] if raw_min != "" and raw_max != "" else None
+
         base_dict = {
             "type": input.type_req(),
             "variable": input.variable(),
-            "bounds": [input.borne_min(), input.borne_max()],
+            "bounds": bounds,
             "by": input.group_by(),
             "filtre": input.filtre(),
         }
 
         if input.type_req() == 'Quantile':
             base_dict.update({
-                "alpha": input.alpha(),
+                "alpha": float(input.alpha()),
                 "candidat": input.candidat(),
             })
 
@@ -446,6 +632,7 @@ def server(input, output, session):
         }
         requetes.set(current)
         ui.notification_show(f"✅ Requête `{new_id}` ajoutée", type="message")
+        ui.update_selectize("delete_req", choices=list(requetes().keys()))
 
     @reactive.effect
     @reactive.event(input.delete_btn)
@@ -470,6 +657,7 @@ def server(input, output, session):
 
         if removed:
             ui.notification_show(f"🗑️ Requête(s) supprimée(s) : {', '.join(removed)}", type="warning")
+            ui.update_selectize("delete_req", choices=list(requetes().keys()))
         if not_found:
             ui.notification_show(f"❌ Requête(s) introuvable(s) : {', '.join(not_found)}", type="error")
 
@@ -481,14 +669,13 @@ def server(input, output, session):
         if current:
             current.clear()  # Vide toutes les requêtes
             requetes.set(current)  # Met à jour le reactive.Value
-            ui.notification_show(f"🗑️ TOUTES les requêtes ont été supprimé", type="warning")
+            ui.notification_show(f"🗑️ TOUTES les requêtes ont été supprimé", type="warning")   
+            ui.update_selectize("delete_req", choices=list(requetes().keys()))
 
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
     def req_display():
-        from src.process_tools import process_request
-        import polars as pl
 
         data = requetes()
         if not data:
@@ -561,7 +748,7 @@ def server(input, output, session):
                     index=False
                 )),
                 height="300px",
-                fillable = False,
+                fillable=False,
                 full_screen=True
             ),
 
@@ -602,8 +789,7 @@ def server(input, output, session):
     @output
     @render.data_frame
     def cross_table():
-        df = sns.load_dataset("penguins")
-        table = df.groupby(["species", "island"]).size().unstack(fill_value=0)
+        table = data_example.groupby(["species", "island"]).size().unstack(fill_value=0)
         flat_table = table.reset_index().melt(id_vars="species", var_name="island", value_name="count")
         return flat_table.sort_values(by=["species", "island"])
 
@@ -612,16 +798,13 @@ def server(input, output, session):
     @reactive.event(input.scale_gauss)
     def cross_table_2():
         from src.request_class import count_dp
-        import opendp.prelude as dp
-        import polars as pl
-        dp.enable_features("contrib")
 
         key_values = {
             "species": ["Adelie", "Chinstrap", "Gentoo"],
             "island": ["Biscoe", "Dream", "Torgersen"]
         }
-        df = sns.load_dataset("penguins")
-        df_lazy = pl.from_pandas(df).lazy()
+
+        df_lazy = pl.from_pandas(data_example).lazy()
 
         context_rho = dp.Context.compositor(
             data=df_lazy,
@@ -648,7 +831,6 @@ def server(input, output, session):
         rho = 1 / (2 * input.scale_gauss() ** 2)
         delta_exp = input.delta_slider()
         delta = f"1e{delta_exp}"
-        from src.fonctions import eps_from_rho_delta
         eps = eps_from_rho_delta(rho, 10**delta_exp)
 
         return ui.HTML(f"""
@@ -664,208 +846,25 @@ def server(input, output, session):
 
     @render.plot
     def histo_plot():
-        df = sns.load_dataset("penguins")
-        quantile_val = np.quantile(df['body_mass_g'].dropna(), input.alpha_slider())
-        fig, ax = plt.subplots()
-        sns.histplot(df['body_mass_g'], stat="percent", bins=40, color='lightcoral', ax=ax)
-        # Ligne verticale pour le quantile
-        ax.axvline(quantile_val, color='black', linestyle='--', linewidth=2)
-
-        ax.set_xlabel("Valeur")
-        ax.set_ylabel("Pourcentage")
-        ax.grid(True)
-        return fig
+        return create_histo_plot(data_example, input.alpha_slider())
 
     @render.plot
     def fc_emp_plot():
-        df = sns.load_dataset("penguins")
-        sorted_df = np.sort(df['body_mass_g'])
-        cdf = np.arange(1, len(df) + 1) / len(df)
-        alpha = input.alpha_slider()
-        quantile_val = np.quantile(df['body_mass_g'].dropna(), alpha)
-
-        fig, ax = plt.subplots()
-
-        ax.plot(sorted_df, cdf, color="lightcoral")
-        # Segment vertical qui monte jusqu'à alpha
-        ax.plot([quantile_val, quantile_val], [0, alpha], color='black', linestyle='--', linewidth=2)
-
-        # Segment horizontal qui va jusqu'au quantile
-        ax.plot([min(df['body_mass_g']), quantile_val], [alpha, alpha], color='black', linestyle='--', linewidth=2)
-
-        ax.text(quantile_val, alpha +0.1, rf"$q_{{{input.alpha_slider():.2f}}} = {quantile_val:.0f}$",
-                color='black', ha='right', va='center', fontsize=11)
-
-        ax.set_xlabel("Valeur")
-        ax.set_ylabel("Probabilité cumulative")
-        ax.grid(True)
-        return fig
+        return create_fc_emp_plot(data_example, input.alpha_slider())
 
     @render_widget
     def score_plot():
-        from scipy.stats import gumbel_r
-        import plotly.graph_objects as go
-
-        df = sns.load_dataset("penguins")
-        candidats = np.linspace(input.candidat_min(), input.candidat_max(), input.candidat_step() + 1).tolist()
-        scores, sensi = manual_quantile_score(df['body_mass_g'], candidats, alpha=input.alpha_slider(), et_si=True)
-
-        # Intervalle de confiance à 99%
-        low_q, high_q = gumbel_r.ppf([0.005, 0.995], loc=0, scale=2 * sensi / input.epsilon_slider())
-        lower = scores + low_q
-        upper = scores + high_q
-
-        min_idx = np.argmin(scores)
-        min_lower = lower[min_idx]
-        min_upper = upper[min_idx]
-
-        # Séparer les points rouges et bleus
-        rouges_x, rouges_y, rouges_err = [], [], []
-        bleus_x, bleus_y, bleus_err = [], [], []
-
-        for c, s, l, u in zip(candidats, scores, lower, upper):
-            if not (u < min_lower or l > min_upper):
-                rouges_x.append(c)
-                rouges_y.append(s)
-                rouges_err.append([s - l, u - s])
-            else:
-                bleus_x.append(c)
-                bleus_y.append(s)
-                bleus_err.append([s - l, u - s])
-
-        # Trace bleue
-        trace_bleu = go.Scatter(
-            x=bleus_x,
-            y=bleus_y,
-            mode='markers',
-            marker=dict(color='blue', size=10, opacity=0.7),
-            name='Non chevauchement'
+        return create_score_plot(
+            data_example, input.alpha_slider(), input.epsilon_slider(),
+            input.candidat_min(), input.candidat_max(), input.candidat_step()
         )
 
-        # Trace rouge
-        trace_rouge = go.Scatter(
-            x=rouges_x,
-            y=rouges_y,
-            mode='markers',
-            marker=dict(color='red', size=10, opacity=0.7),
-            name='Chevauchement'
-        )
-
-        # Barres d’erreur avec trace visible pour la légende
-        trace_erreur = go.Scatter(
-            x=candidats,
-            y=scores,
-            mode='markers',  # Affiche un petit point noir pour activer la légende
-            marker=dict(color='black', size=2, symbol='line-ns-open', opacity=0.7),
-            error_y=dict(
-                type='data',
-                symmetric=False,
-                array=[u - s for s, u in zip(scores, upper)],
-                arrayminus=[s - l for s, l in zip(scores, lower)],
-                color='black',
-                thickness=1,
-                width=4
-            ),
-            name='IC à 99% (Gumbel)'
-        )
-
-        layout = go.Layout(
-            xaxis=dict(
-                title="Candidat",
-                showgrid=True,
-                gridcolor='lightgray',
-                linecolor='black',
-                linewidth=1,
-                mirror=True
-            ),
-            yaxis=dict(
-                title="Score",
-                showgrid=True,
-                gridcolor='lightgray',
-                linecolor='black',
-                linewidth=1,
-                mirror=True
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            legend=dict(
-                x=0.5, y=1.2,
-                xanchor='center',
-                yanchor='top',
-                orientation='h',
-                bgcolor='rgba(255,255,255,0.9)',
-                bordercolor='lightgray',
-                borderwidth=1
-            ),
-            margin=dict(t=50, r=30, l=60, b=60),
-        )
-
-        return go.Figure(data=[trace_erreur, trace_bleu, trace_rouge], layout=layout)
-
-    @render_widget 
+    @render_widget
     def proba_plot():
-        import plotly.graph_objects as go
-        df = sns.load_dataset("penguins")
-        candidats = np.linspace(input.candidat_min(), input.candidat_max(), input.candidat_step() + 1).tolist()
-        scores, sensi = manual_quantile_score(df['body_mass_g'], candidats, alpha=input.alpha_slider(), et_si=True)
-
-        # Probabilités
-        proba_non_norm = np.exp(- input.epsilon_slider() * scores / (2 * sensi))
-        proba = proba_non_norm / np.sum(proba_non_norm)
-
-        # Seuil du 95e percentile
-        seuil = np.quantile(proba, 0.95)
-
-        # Points rouges
-        trace_red = go.Scatter(
-            x=[c for c, p in zip(candidats, proba) if p >= seuil],
-            y=[p for p in proba if p >= seuil],
-            mode='markers',
-            marker=dict(color='red', size=10, opacity=0.7),
-            name='≥ 95% des proba'
+        return create_proba_plot(
+            data_example, input.alpha_slider(), input.epsilon_slider(),
+            input.candidat_min(), input.candidat_max(), input.candidat_step()
         )
-
-        # Points bleus
-        trace_blue = go.Scatter(
-            x=[c for c, p in zip(candidats, proba) if p < seuil],
-            y=[p for p in proba if p < seuil],
-            mode='markers',
-            marker=dict(color='blue', size=10, opacity=0.7),
-            name='< 95% des proba'
-        )
-
-        layout = go.Layout(
-            xaxis=dict(
-                title="Candidat",
-                showgrid=True,
-                gridcolor='lightgray',
-                linecolor='black',  # axe X en noir
-                linewidth=1,
-                mirror=True         # pour que le bas ET le haut aient une ligne noire
-            ),
-            yaxis=dict(
-                title="Probabilité",
-                showgrid=True,
-                gridcolor='lightgray',
-                linecolor='black',  # axe Y en noir
-                linewidth=1,
-                mirror=True         # pour que la gauche ET la droite aient une ligne noire
-            ),
-            plot_bgcolor='white',   # fond de la zone de traçage
-            paper_bgcolor='white',  # fond global (autour du graphique)
-            legend=dict(
-                x=0.5, y=1.2,
-                xanchor='center',
-                yanchor='top',
-                orientation='h',  # Horizontale
-                bgcolor='rgba(255,255,255,0.9)',
-                bordercolor='lightgray',
-                borderwidth=1
-            ),
-            margin=dict(t=50, r=30, l=60, b=60),
-        )
-
-        return go.Figure(data=[trace_red, trace_blue], layout=layout)
 
 
 www_dir = Path(__file__).parent / "www"

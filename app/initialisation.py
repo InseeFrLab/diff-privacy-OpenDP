@@ -62,21 +62,29 @@ def update_info_request():
     st.session_state.poids_requetes_quantile = poids_requetes_quantile
 
 
-def update_context(rho_budget, poids_requetes_rho, poids_requetes_quantile):
+def update_context(CONTEXT_PARAM, rho_budget, poids_requetes_rho, poids_requetes_quantile):
 
     rho_utilise = rho_budget * (1 - sum(poids_requetes_quantile))
     eps_quantile = np.sqrt(8 * rho_budget * sum(poids_requetes_quantile))
 
-    context_rho = dp.Context.compositor(
-            **CONTEXT_PARAM,
-            privacy_loss=dp.loss_of(rho=rho_utilise),
-            split_by_weights=poids_requetes_rho
-        )
+    if rho_utilise != 0:
+        context_rho = dp.Context.compositor(
+                **CONTEXT_PARAM,
+                privacy_loss=dp.loss_of(rho=rho_utilise),
+                split_by_weights=poids_requetes_rho
+            )
 
-    context_eps = dp.Context.compositor(
-            **CONTEXT_PARAM,
-            privacy_loss=dp.loss_of(epsilon=eps_quantile),
-            split_by_weights=poids_requetes_quantile
-        )
+    else:
+        context_rho = None
+
+    if eps_quantile != 0:
+        context_eps = dp.Context.compositor(
+                **CONTEXT_PARAM,
+                privacy_loss=dp.loss_of(epsilon=eps_quantile),
+                split_by_weights=poids_requetes_quantile
+            )
+
+    else:
+        context_eps = None
 
     return context_rho, context_eps
