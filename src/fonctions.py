@@ -8,6 +8,95 @@ import plotly.colors as pc
 import pandas as pd
 from shiny import ui
 
+
+def affichage_requete(requetes, dataset):
+    from src.process_tools import process_request
+
+    panels = []
+
+    for key, req in requetes.items():
+        # Colonne de gauche : paramètres
+        df = pl.from_pandas(dataset).lazy()
+        resultat = process_request(df, req)
+
+        if req.get("by") is not None:
+            resultat = resultat.sort(by=req.get("by"))
+
+        param_card = ui.card(
+            ui.card_header("Paramètres"),
+            make_card_body(req)
+        )
+
+        # Colonne de droite : table / placeholder
+        result_card = ui.card(
+            ui.card_header("Résultats sans application de la DP (à titre indicatif)"),
+            ui.tags.style("""
+                .table {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    font-size: 0.9rem;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.05);
+                    border-radius: 0.25rem;
+                    border-collapse: collapse;
+                    width: 100%;
+                    border: 1px solid #dee2e6;
+                }
+                .table-hover tbody tr:hover {
+                    background-color: #f1f1f1;
+                }
+                .table-striped tbody tr:nth-of-type(odd) {
+                    background-color: #fafafa;
+                }
+                table.table thead th {
+                    background-color: #f8f9fa !important;
+                    font-weight: 700 !important;
+                    border-left: 1px solid #dee2e6;
+                    border-right: 1px solid #dee2e6;
+                    border-bottom: 2px solid #dee2e6;
+                    padding: 0.3rem 0.6rem;
+                    vertical-align: middle !important;
+                    text-align: center;
+                    position: sticky;
+                    top: 0;
+                    z-index: 10;
+                }
+                tbody td {
+                    padding: 0.3rem 0.6rem;
+                    vertical-align: middle !important;
+                    text-align: center;
+                    border-left: 1px solid #dee2e6;
+                    border-right: 1px solid #dee2e6;
+                }
+                thead th:first-child, tbody td:first-child {
+                    border-left: none;
+                }
+                thead th:last-child, tbody td:last-child {
+                    border-right: none;
+                }
+            """),
+            ui.HTML(resultat.to_pandas().to_html(
+                classes="table table-striped table-hover table-sm text-center align-middle",
+                border=0,
+                index=False
+            )),
+            height="300px",
+            fillable=False,
+            full_screen=True
+        ),
+
+        # Ligne avec deux colonnes côte à côte
+        content_row = ui.row(
+            ui.column(4, param_card),
+            ui.column(8, result_card)
+        )
+
+        # Panneau d'accordéon contenant la ligne
+        panels.append(
+            ui.accordion_panel(f"{key} — {req.get('type', '—')}", content_row)
+        )
+
+    return ui.accordion(*panels)
+
+
 def make_card_body(req):
     parts = []
 

@@ -7,15 +7,21 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import norm
 import seaborn as sns
-from shinywidgets import output_widget, render_widget
+from shinywidgets import render_widget
 from app.initialisation import update_context
 from src.process_tools import process_request_dp, process_request
-from src.fonctions import make_card_body, eps_from_rho_delta
+from src.fonctions import eps_from_rho_delta, affichage_requete
 import opendp.prelude as dp
 from plots import (
     create_histo_plot, create_fc_emp_plot,
     create_score_plot, create_proba_plot,
     create_barplot, create_scatterplot
+)
+from layout import (
+    page_donnees,
+    page_preparer_requetes,
+    page_mecanisme_dp,
+    page_conception_budget
 )
 
 dp.enable_features("contrib")
@@ -28,341 +34,51 @@ type_req = ["Comptage", "Total", "Moyenne", "Quantile"]
 data_example = sns.load_dataset("penguins")
 
 
-def make_sliders(filter_type: list[str], prefix: str):
-    sliders = []
+def make_radio_buttons(filter_type: list[str]):
+    radio_buttons = []
     priorite = {"Comptage": "2", "Total": "2", "Moyenne": "1", "Quantile": "3"}
     for key, req in requetes().items():
         if req["type"] in filter_type:
-            slider_id = f"{prefix}_{key}"
-            sliders.append(
-                ui.input_radio_buttons(slider_id, key,
+            radio_buttons_id = key
+            radio_buttons.append(
+                ui.input_radio_buttons(radio_buttons_id, key,
                     {"1": 1, "2": 2, "3": 3}, selected=priorite[req["type"]]
                 )
             )
-    return sliders
+    return radio_buttons
+
+
+def normalize_weights(input) -> dict:
+    radio_to_weight = {1: 1, 2: 0.5, 3: 0.25}
+    reqs = requetes()
+
+    raw_weights = {
+        key: radio_to_weight.get(float(getattr(input, key)()), 0)
+        for key, req in reqs.items()
+    }
+
+    total = sum(raw_weights.values())
+    return {k: v / total for k, v in raw_weights.items()}
 
 
 # 1. UI --------------------------------------
-
-app_ui = (
-    ui.page_navbar(
-        # Page 1
-        ui.nav_spacer(),  # push nav items to the right
-        ui.nav_panel("Données",
-            ui.page_sidebar(
-                ui.sidebar(
-                    ui.input_select(
-                        "default_dataset",
-                        "Choisir un jeu de données prédéfini:",
-                        {
-                            "iris": "Iris",
-                            "penguins": "Palmer Penguins"
-                        }
-                    ),
-                    ui.input_file("dataset_input", "Ou importer un fichier CSV ou Parquet", accept=[".csv", ".parquet"]),
-                    position='right',
-                    bg="#f8f8f8"
-                ),
-                ui.layout_columns(
-                    ui.card(
-                        ui.card_header("Aperçu des données"),
-                        ui.output_data_frame("data_view"),
-                        full_screen=True,
-                    ),
-                    ui.card(
-                        ui.card_header("Résumé statistique"),
-                        ui.output_data_frame("data_summary"),
-                        full_screen=True,
-                    ),
-                ),
-            ),
-        ),
-        # Page 2
-        ui.nav_panel("Préparer ses requêtes",
-            ui.page_sidebar(
-                ui.sidebar(
-                    ui.input_file("request_input", "📂 Importer un fichier JSON", accept=[".json"]),
-                    ui.input_action_button("save_json", "💾 Exporter le JSON"),
-                    position="right",
-                    bg="#f8f8f8"
-                ),
-                ui.panel_well(
-                    ui.h4("➕ Ajouter une requête"),
-                    ui.br(),
-                    # Ligne 1
-                    ui.row(
-                        ui.column(3, ui.input_selectize("type_req", "Type de requête:", choices=type_req, selected=type_req[0])),
-                        ui.column(3, ui.input_text("filtre", "Condition de filtrage:")),
-                        ui.column(3, ui.input_text("borne_min", "Borne min:"))
-                    ),
-                    ui.br(),
-                    # Ligne 2
-                    ui.row(
-                        ui.column(3, ui.input_selectize("variable", "Variable:", choices={}, options={"plugins": ["clear_button"]})),
-                        ui.column(3, ui.input_selectize("group_by", "Regrouper par:", choices={}, multiple=True)),
-                        ui.column(3, ui.input_text("borne_max", "Borne max:"))
-                    ),
-                    ui.br(),
-                    # Ligne 3 (Optionnel)
-                    ui.panel_conditional("input.type_req == 'Quantile' ",
-                        ui.row(
-                            ui.column(3, ui.input_numeric("alpha", "Ordre du quantile:", 0.5, min=0, max=1, step=0.01)),
-                            ui.column(3, ui.input_text("candidat", "Liste des candidats:"))
-                        ),
-                    ),
-                    ui.br(),
-                    # Ligne 4 : bouton aligné à droite
-                    ui.row(
-                        ui.column(12,
-                            ui.div(
-                                ui.input_action_button("add_req", "➕ Ajouter la requête"),
-                                class_="d-flex justify-content-end"
-                            )
-                        )
-                    ),
-                ),
-                ui.hr(),
-                ui.layout_columns(
-                    ui.panel_well(
-                        ui.h4("🗑️ Supprimer une requête"),
-                        ui.br(),
-                        # Ligne 1
-                        ui.row(
-                            ui.column(6, ui.input_selectize("delete_req", "Requêtes à supprimer:", choices={}, multiple=True)),
-                        ),
-                        # Ligne 2 : bouton aligné à droite
-                        ui.row(
-                            ui.column(12,
-                                ui.div(
-                                    ui.input_action_button("delete_btn", "Supprimer"),
-                                    class_="d-flex justify-content-end"
-                                )
-                            )
-                        ),
-                    ),
-                    ui.panel_well(
-                        ui.h4("🗑️ Supprimer toutes les requêtes"),
-                        ui.br(),
-                        ui.row(
-                            ui.column(12, ui.div(style="height: 85px"))  # Hauteur du champ texte simulée
-                        ),
-                        ui.row(
-                            ui.column(12,
-                                ui.div(
-                                    ui.input_action_button("delete_all_btn", "Supprimer TOUT", class_="btn btn-danger"),
-                                    class_="d-flex justify-content-end"
-                                )
-                            )
-                        ),
-                    ),
-                ),
-                ui.hr(),
-                ui.panel_well(
-                    ui.h4("📋 Requêtes actuelles"),
-                    ui.br(),
-                    ui.output_ui("req_display")
-                ),
-            )
-        ),
-
-        ui.nav_panel("Mécanisme DP",
-            ui.panel_well(
-                ui.h4("Mécanisme DP : ajout d'un bruit Gaussien centré (Comptage et Total)"),
-                ui.br(),
-                ui.div(
-                    # Partie gauche : slider + résumé
-                    ui.div(
-                        ui.div(
-                            ui.input_slider("scale_gauss", "Écart type du bruit :", min=1, max=100, value=10),
-                            style="width: 400px;"
-                        ),
-                        ui.div(
-                            ui.output_ui("interval_summary"),
-                        ),
-                        style="display: flex; flex-direction: column; gap: 20px;"
-                    ),
-
-                    # Partie gauche : deux tableaux côte à côte
-                    ui.div(
-                        ui.layout_column_wrap(
-                            ui.card(
-                                ui.card_header("Tableau de comptage non bruité"),
-                                ui.output_data_frame("cross_table"),
-                            ),
-                            ui.card(
-                                ui.card_header("Exemple après bruitage (sans post-traitement)"),
-                                ui.output_data_frame("cross_table_2"),
-                            ),
-                            width=1 / 2,
-                        ),
-                        style="flex: 1;"
-                    ),
-
-                    # Partie budget DP : propre et sobre
-                    ui.div(
-                        ui.output_ui("dp_budget_summary"),
-                        ui.input_slider(
-                            "delta_slider",
-                            "Exposant de δ",
-                            min=-10,
-                            max=-1,
-                            value=-3,
-                            step=1,
-                            width="320px"
-                        ),
-                        style="margin-top: 30px; display: flex; flex-direction: column; gap: 16px;"
-                    ),
-
-
-                    style="display: flex; align-items: flex-start; gap: 50px;"
-                ),
-            ),
-            ui.hr(),
-            ui.panel_well(
-                ui.h4("Mécanisme DP : scorer des candidats et tirer le score minimal après ajout d'un bruit (Quantile)"),
-                ui.br(),
-                # Conteneur principal en colonnes
-                ui.div(
-                    # Ligne 1
-                    ui.div(
-                        ui.layout_columns(
-                            # Colonne 1 : texte explicatif
-                            ui.div(
-                                ui.HTML("""
-                                    <div style='margin-top:20px; padding:10px; background-color:#f9f9f9; border-radius:12px;
-                                                font-family: "Raleway", "Garamond", sans-serif; font-size:16px; color:#333'>
-                                        <p style="margin-bottom:10px">
-                                            <strong>Exemple d'application à la variable <em>body_mass_g</em> du dataset Penguins :</strong>
-                                        </p>
-                                        <p style="margin-left:10px">
-                                            La fonction de score utilisée est :
-                                            <br><br>
-                                            <strong>score</strong>(x, c, &alpha;) =<br>
-                                            − 10 000 &times; | ∑<sub>i=1</sub><sup>n</sup> 1<sub>{x<sub>i</sub> &lt; c}</sub> − &alpha; &times; (n − ∑<sub>i=1</sub><sup>n</sup> 1<sub>{x<sub>i</sub> = c}</sub>) |
-                                        </p>
-                                        <p style="margin-left:10px">
-                                            où <strong>α</strong> est l’ordre du quantile, et <strong>c</strong> un candidat et <strong>x</strong> notre variable d'intérêt de taille <strong>n</strong>.
-                                        </p>
-                                    </div>
-                                    """),
-                                style="padding: 10px;"
-                            ),
-                            # Colonne 2 : première carte
-                            ui.card(
-                                ui.card_header("Histogramme"),
-                                ui.output_plot("histo_plot"),
-                                full_screen=True,
-                            ),
-                            # Colonne 3 : deuxième carte
-                            ui.card(
-                                ui.card_header("Fonction de répartion empirique"),
-                                ui.output_plot("fc_emp_plot"),
-                                full_screen=True,
-                            ),
-                            col_widths=[3, 4, 5]
-                        ),
-                        style="margin-bottom: 40px;"
-                    ),
-
-                    # Ligne 2
-                    ui.div(
-                        ui.layout_columns(
-                            # Colonne 1 : texte + sliders + équation
-                            ui.div(
-                                ui.HTML("<strong>Paramètres :</strong>"),
-                                ui.input_slider("epsilon_slider", "Budget epsilon :", min=0.01, max=5, value=0.5, step=0.01),
-                                ui.input_slider("alpha_slider", "Ordre du quantile :", min=0, max=1, value=0.5, step=0.01),
-                                ui.p("Définir l’intervalle et le pas pour le candidat :"),
-                                # Ligne horizontale pour les 3 champs
-                                ui.div(
-                                    ui.input_numeric("candidat_min", "Candidat min :", value=2500),
-                                    ui.input_numeric("candidat_max", "Candidat max :", value=6500),
-                                    ui.input_numeric("candidat_step", "Pas :", value=100),
-                                    style="display: flex; flex-direction: row; gap: 15px; align-items: flex-end;"
-                                ),
-                                style="padding: 10px; display: flex; flex-direction: column; gap: 20px;"
-                            ),
-                            # Colonne 2 : carte placeholder
-                            ui.card(
-                                ui.card_header("Score des candidats"),
-                                output_widget("score_plot"),
-                                full_screen=True,
-                            ),
-                            # Colonne 3 : carte placeholder
-                            ui.card(
-                                ui.card_header("Probabilité de sélection"),
-                                output_widget("proba_plot"),
-                                full_screen=True,
-                            ),
-                            col_widths=[2, 6, 4]
-                        )
-                    ),
-                    style="display: flex; flex-direction: column; gap: 40px;"
-                )
-            ),
-        ),
-
-        ui.nav_panel("Conception du budget",
-            ui.page_sidebar(
-                ui.sidebar(
-                    ui.h3("Répartition libre du budget"),
-                    ui.input_numeric("budget_total", "Budget total :", 0.2, min=0.1, max=1, step=0.01),
-                    position="right",
-                    bg="#f8f8f8"
-                ),
-
-                ui.panel_well(
-                    ui.h4("Répartition du budget pour les comptages"),
-                    ui.layout_columns(
-                        ui.output_ui("sliders_groupe_A"),        # Partie gauche
-                        ui.card(                                 # Partie droite (graphique Plotly)
-                            output_widget("plot_groupe_comptage"),
-                            full_screen=True
-                        ),
-                        col_widths=[4, 8]
-                    )
-                ),
-                ui.hr(),
-                ui.panel_well(
-                    ui.h4("Répartition du budget pour les totaux et les moyennes"),
-                    ui.layout_columns(
-                        ui.output_ui("sliders_groupe_B"),        # Partie gauche
-                        ui.card(                                 # Partie droite (graphique Plotly)
-                            output_widget("plot_groupe_total_moyenne"),
-                            full_screen=True
-                        ),
-                        col_widths=[4, 8]
-                    )
-                ),
-                ui.hr(),
-                ui.panel_well(
-                    ui.h4("Répartition du budget pour les quantiles"),
-                    ui.layout_columns(
-                        ui.output_ui("sliders_groupe_C"),        # Partie gauche
-                        ui.card(                                 # Partie droite (graphique Plotly)
-                            output_widget("plot_group_quantile"),
-                            full_screen=True
-                        ),
-                        col_widths=[4, 8]
-                    )
-                ),
-            ),
-        ),
-
-        ui.nav_panel("Résultat DP", ui.h3("À compléter...")),
-
-        ui.nav_panel("Etat budget dataset", ui.h3("À compléter...")),
-
-        ui.nav_panel("A propos", ui.h3("À compléter...")),
-
-        title=ui.div(
-            ui.img(src="insee-logo.jpg", height="80px", style="margin-right:10px"),
-            ui.div("Poc – Differential Privacy", style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 400; font-size: 28px;"),
-            style="display: flex; align-items: center; gap: 10px;"
-        ),
-        id="page",
-    )
+app_ui = ui.page_navbar(
+    ui.nav_spacer(),
+    page_donnees(),
+    page_preparer_requetes(),
+    page_mecanisme_dp(),
+    page_conception_budget(),
+    ui.nav_panel("Résultat DP", ui.h3("À compléter...")),
+    ui.nav_panel("Etat budget dataset", ui.h3("À compléter...")),
+    ui.nav_panel("A propos", ui.h3("À compléter...")),
+    title=ui.div(
+        ui.img(src="insee-logo.jpg", height="80px", style="margin-right:10px"),
+        ui.div("Poc – Differential Privacy", style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 400; font-size: 28px;"),
+        style="display: flex; align-items: center; gap: 10px;"
+    ),
+    id="page"
 )
+
 
 # 2. Server ----------------------------------
 
@@ -372,144 +88,141 @@ def server(input, output, session):
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
-    def sliders_groupe_A():
+    def radio_buttons_comptage():
         return ui.layout_columns(
-            *make_sliders(["Comptage"], "A"),
-            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+            *make_radio_buttons(["Comptage"]),
+            col_widths=3
         )
 
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
-    def sliders_groupe_B():
+    def radio_buttons_total_moyenne():
         return ui.layout_columns(
-            *make_sliders(["Total", "Moyenne"], "B"),
-            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+            *make_radio_buttons(["Total", "Moyenne"]),
+            col_widths=3
         )
 
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
-    def sliders_groupe_C():
+    def radio_buttons_quantile():
         return ui.layout_columns(
-            *make_sliders(["Quantile"], "C"),
-            col_widths=[3, 3, 3, 3]  # 4 sliders par ligne
+            *make_radio_buttons(["Quantile"]),
+            col_widths=3
         )
 
     @render_widget
-    def plot_groupe_comptage():
-        resultats_count, _, _ = X()
-        df_count = pd.DataFrame(resultats_count)
-
-        return create_barplot(df_count, x_col="requête", y_col="écart_type")
+    def plot_comptage():
+        df = pd.DataFrame(X_count())
+        return create_barplot(df, x_col="requête", y_col="écart_type")
 
 
     @render_widget
-    def plot_groupe_total_moyenne():
-        _, resultats_mean_sum, _ = X()
-        df_mean_sum = pd.DataFrame(resultats_mean_sum)
-        df_mean_sum = df_mean_sum.explode("cv (%)").reset_index(drop=True)
+    def plot_total_moyenne():
+        df = pd.DataFrame(X_total_moyenne())
+        df = df.explode("cv (%)").reset_index(drop=True)
 
-        return create_scatterplot(df_mean_sum, x_col="cv (%)", y_col="requête", size_col="cv (%)")
+        return create_scatterplot(df, x_col="cv (%)", y_col="requête", size_col="cv (%)")
 
     @render_widget
-    def plot_groupe_quantile():
-        _, _, resultats_quantile = X()
-        df_quantile = pd.DataFrame(resultats_quantile)
+    def plot_quantile():
+        df = pd.DataFrame(X_quantile())
+        return create_barplot(df, x_col="requête", y_col="candidats")
 
-        return create_barplot(df_quantile, x_col="requête", y_col="candidats")
-
+    
     @reactive.Calc
-    def X():
-        all_sliders = {}
+    def X_count():
+        weights = normalize_weights(input)
+        results = []
+        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["count", "comptage"]}
 
-        for prefix, types in [("A", ["Comptage"]), ("B", ["Total", "Moyenne"]), ("C", ["Quantile"])]:
-            for key, req in requetes().items():
-                if req["type"] in types:
-                    slider_id = f"{prefix}_{key}"
-                    all_sliders[key] = slider_id
-
-        # Mapping des valeurs du slider vers poids
-        slider_to_weight = {1: 1, 2: 0.5, 3: 0.25}
-
-        # Appliquer le mapping
-        values = {
-            key: slider_to_weight.get(float(getattr(input, sid)()), 0)
-            for key, sid in all_sliders.items()
-        }
-        # Normalisation
-        total = sum(values.values())
-        poids_normalises = {i: v / total for i, v in values.items()} if total > 0 else {i: 0 for i in values}
-
-        poids_requetes_rho = [
-            poids_normalises[clef]
-            for clef, req in requetes().items()
-            if req["type"] != "quantile" and req["type"] != "Quantile"
-        ]
-
-        poids_requetes_quantile = [
-            poids_normalises[clef]
-            for clef, req in requetes().items()
-            if req["type"] == "quantile" or req["type"] == "Quantile"
-        ]
-
-        count_rho = -1
-        count_quantile = -1
-
-        resultats_count = []
-        resultats_sum_mean = []
-        resultats_quantile = []
-
-        # Affichage dans l'ordre des requêtes, mais dans la colonne du type
-        for key in requetes().keys():
-            req = requetes()[key]
-            req_type = req["type"]
-
-            if req_type != "quantile" and req_type != "Quantile":
-                count_rho += 1
-                poids_requetes_rho[0], poids_requetes_rho[count_rho] = poids_requetes_rho[count_rho], poids_requetes_rho[0]
-            else:
-                count_quantile += 1
-                poids_requetes_quantile[0], poids_requetes_quantile[count_quantile] = poids_requetes_quantile[count_quantile], poids_requetes_quantile[0]
+        for i, (key, req) in enumerate(reqs.items()):
+            poids = list(weights.values())
+            if poids:
+                # mettre le poids courant en premier
+                poids[0], poids[i] = poids[i], poids[0]
 
             context_param = {
                 "data": pl.from_pandas(dataset()).lazy(),
                 "privacy_unit": dp.unit_of(contributions=1),
-                "margins": [
-                    dp.polars.Margin(max_partition_length=10000)
-                ],
+                "margins": [dp.polars.Margin(max_partition_length=10000)],
             }
 
-            (context_rho, context_eps) = update_context(context_param, input.budget_total(), poids_requetes_rho, poids_requetes_quantile)
+            context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
 
             resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+            scale = resultat_dp.precision()["scale"][0]
+            results.append({"requête": key, "écart_type": scale})
 
-            if req_type == "count" or req_type == "Comptage":
-                scale = resultat_dp.precision()["scale"][0]
-                resultats_count.append({"requête": key, "écart_type": scale})
+        return results
 
-            elif req_type == "sum" or req_type == "Total":
+    
+    @reactive.Calc
+    def X_total_moyenne():
+        weights = normalize_weights(input)
+        results = []
+        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["total", "moyenne"]}
+
+        for i, (key, req) in enumerate(reqs.items()):
+            poids = list(weights.values())
+            if poids:
+                # mettre le poids courant en premier
+                poids[0], poids[i] = poids[i], poids[0]
+
+            context_param = {
+                "data": pl.from_pandas(dataset()).lazy(),
+                "privacy_unit": dp.unit_of(contributions=1),
+                "margins": [dp.polars.Margin(max_partition_length=10000)],
+            }
+
+            context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
+
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+            if req["type"] == "sum" or req["type"] == "Total":
                 scale = resultat_dp.precision()["scale"]
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
                 list_cv = 100 * scale[0]/resultat["sum"]
-                resultats_sum_mean.append({"requête": key, "cv (%)": list_cv})
+                results.append({"requête": key, "cv (%)": list_cv})
 
-            elif req_type == "mean" or req_type == "Moyenne":
+            if req["type"] == "mean" or req["type"] == "Moyenne":
                 scale_tot, scale_len = resultat_dp.precision()["scale"]
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
                 list_cv_tot = scale_tot/resultat["sum"]
                 list_cv_len = scale_len/resultat["count"]
                 list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
-                resultats_sum_mean.append({"requête": key, "cv (%)": list_cv})
+                results.append({"requête": key, "cv (%)": list_cv})
 
-            else:  # quantile
-                nb_candidat = resultat_dp.precision(
-                    data=pl.from_pandas(dataset()).lazy(),
-                    epsilon=np.sqrt(8 * input.budget_total() * sum(poids_requetes_quantile)) * poids_requetes_quantile[0]
-                )
-                resultats_quantile.append({"requête": key, "candidats": nb_candidat})
-            
-        return resultats_count, resultats_sum_mean, resultats_quantile
+        return results
+
+    @reactive.Calc
+    def X_quantile():
+        weights = normalize_weights(input)
+        results = []
+        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["quantile"]}
+
+        for i, (key, req) in enumerate(reqs.items()):
+            poids = list(weights.values())
+            if poids:
+                # mettre le poids courant en premier
+                poids[0], poids[i] = poids[i], poids[0]
+
+            context_param = {
+                "data": pl.from_pandas(dataset()).lazy(),
+                "privacy_unit": dp.unit_of(contributions=1),
+                "margins": [dp.polars.Margin(max_partition_length=10000)],
+            }
+
+            context_rho, context_eps = update_context(context_param, input.budget_total(), [], poids)
+
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+            nb_candidat = resultat_dp.precision(
+                data=pl.from_pandas(dataset()).lazy(),
+                epsilon=np.sqrt(8 * input.budget_total() * sum(poids)) * poids[0]
+            )
+            results.append({"requête": key, "candidats": nb_candidat})
+
+        return results
 
 
     # Page 1 ----------------------------------
@@ -676,94 +389,10 @@ def server(input, output, session):
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
     def req_display():
-
-        data = requetes()
-        if not data:
+        data_requetes = requetes()
+        if not data_requetes:
             return ui.p("Aucune requête chargée.")
-
-        panels = []
-
-        for key, req in data.items():
-            # Colonne de gauche : paramètres
-            df = pl.from_pandas(dataset()).lazy()
-            resultat = process_request(df, req)
-
-            if req.get("by") is not None:
-                resultat = resultat.sort(by=req.get("by"))
-
-            param_card = ui.card(
-                ui.card_header("Paramètres"),
-                make_card_body(req)
-            )
-
-            # Colonne de droite : table / placeholder
-            result_card = ui.card(
-                ui.card_header("Résultats sans application de la DP (à titre indicatif)"),
-                ui.tags.style("""
-                    .table {
-                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                        font-size: 0.9rem;
-                        box-shadow: 0 0 10px rgba(0,0,0,0.05);
-                        border-radius: 0.25rem;
-                        border-collapse: collapse;
-                        width: 100%;
-                        border: 1px solid #dee2e6;
-                    }
-                    .table-hover tbody tr:hover {
-                        background-color: #f1f1f1;
-                    }
-                    .table-striped tbody tr:nth-of-type(odd) {
-                        background-color: #fafafa;
-                    }
-                    table.table thead th {
-                        background-color: #f8f9fa !important;
-                        font-weight: 700 !important;
-                        border-left: 1px solid #dee2e6;
-                        border-right: 1px solid #dee2e6;
-                        border-bottom: 2px solid #dee2e6;
-                        padding: 0.3rem 0.6rem;
-                        vertical-align: middle !important;
-                        text-align: center;
-                        position: sticky;
-                        top: 0;
-                        z-index: 10;
-                    }
-                    tbody td {
-                        padding: 0.3rem 0.6rem;
-                        vertical-align: middle !important;
-                        text-align: center;
-                        border-left: 1px solid #dee2e6;
-                        border-right: 1px solid #dee2e6;
-                    }
-                    thead th:first-child, tbody td:first-child {
-                        border-left: none;
-                    }
-                    thead th:last-child, tbody td:last-child {
-                        border-right: none;
-                    }
-                """),
-                ui.HTML(resultat.to_pandas().to_html(
-                    classes="table table-striped table-hover table-sm text-center align-middle",
-                    border=0,
-                    index=False
-                )),
-                height="300px",
-                fillable=False,
-                full_screen=True
-            ),
-
-            # Ligne avec deux colonnes côte à côte
-            content_row = ui.row(
-                ui.column(4, param_card),
-                ui.column(8, result_card)
-            )
-
-            # Panneau d'accordéon contenant la ligne
-            panels.append(
-                ui.accordion_panel(f"{key} — {req.get('type', '—')}", content_row)
-            )
-
-        return ui.accordion(*panels)
+        return affichage_requete(data_requetes, dataset())
 
     # Page 3 ----------------------------------
 
@@ -854,16 +483,18 @@ def server(input, output, session):
 
     @render_widget
     def score_plot():
+        candidat_min, candidat_max = input.candidat_slider()
         return create_score_plot(
             data_example, input.alpha_slider(), input.epsilon_slider(),
-            input.candidat_min(), input.candidat_max(), input.candidat_step()
+            candidat_min, candidat_max, input.candidat_step()
         )
 
     @render_widget
     def proba_plot():
+        candidat_min, candidat_max = input.candidat_slider()
         return create_proba_plot(
             data_example, input.alpha_slider(), input.epsilon_slider(),
-            input.candidat_min(), input.candidat_max(), input.candidat_step()
+            candidat_min, candidat_max, input.candidat_step()
         )
 
 
