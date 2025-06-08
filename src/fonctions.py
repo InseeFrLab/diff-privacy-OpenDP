@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import plotly.colors as pc
 import pandas as pd
 from shiny import ui
+import asyncio
 
 
 def affichage_requete(requetes, dataset):
@@ -95,6 +96,65 @@ def affichage_requete(requetes, dataset):
         )
 
     return ui.accordion(*panels)
+
+
+async def affichage_requete_dp(context_rho, context_eps, key_values, requetes, progress, results_store):
+    from src.process_tools import process_request_dp
+    panels = []
+
+    # Copie de l'état actuel du store
+    current_results = results_store()
+
+    for i, (key, req) in enumerate(requetes.items(), start=1):
+        progress.set(i, message=f"Requête {key} — {req.get('type', '—')}", detail="Calcul en cours...")
+        await asyncio.sleep(0.05)
+
+        resultat_dp = process_request_dp(context_rho, context_eps, key_values, req).execute()
+        df_result = resultat_dp.release().collect()
+
+        if req.get("type") == "Moyenne":
+            df_result = df_result.with_columns(mean=pl.col.total / pl.col.len)
+
+        if req.get("by") is not None:
+            df_result = df_result.sort(by=req.get("by"))
+            first_col = df_result.columns[0]
+            new_order = df_result.columns[1:] + [first_col]
+            df_result = df_result.select(new_order)
+
+        # ✅ Stocker le résultat sous forme pandas
+        current_results[key] = df_result.to_pandas()
+
+        param_card = ui.card(
+            ui.card_header("Paramètres"),
+            make_card_body(req)
+        )
+
+        result_card = ui.card(
+            ui.card_header("Résultats après application de la DP"),
+            ui.HTML(df_result.to_pandas().to_html(
+                classes="table table-striped table-hover table-sm text-center align-middle",
+                border=0,
+                index=False
+            )),
+            height="300px",
+            fillable=False,
+            full_screen=True
+        )
+
+        content_row = ui.row(
+            ui.column(4, param_card),
+            ui.column(8, result_card)
+        )
+
+        panels.append(
+            ui.accordion_panel(f"{key} — {req.get('type', '—')}", content_row)
+        )
+
+    # ✅ Mise à jour finale du reactive.Value
+    results_store.set(current_results)
+
+    return ui.accordion(*panels)
+
 
 
 def make_card_body(req):

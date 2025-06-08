@@ -1,8 +1,36 @@
 from shiny import ui
 from shinywidgets import output_widget
 
-# Page Données ----------------------------------
+regions_france = [
+    "France entière",
+    "Auvergne-Rhône-Alpes",
+    "Bourgogne-Franche-Comté",
+    "Bretagne",
+    "Centre-Val de Loire",
+    "Corse",
+    "Grand Est",
+    "Hauts-de-France",
+    "Île-de-France",
+    "Normandie",
+    "Nouvelle-Aquitaine",
+    "Occitanie",
+    "Pays de la Loire",
+    "Provence-Alpes-Côte d’Azur",
+    "Guadeloupe",
+    "Martinique",
+    "Guyane",
+    "La Réunion",
+    "Mayotte"
+]
 
+dataset = [
+    "Fidéli",
+    "Filosofi",
+    "Penguin"
+]
+
+
+# Page Données ----------------------------------
 
 def page_donnees():
     return ui.nav_panel("Données",
@@ -27,116 +55,13 @@ def sidebar_donnees():
 
 
 def layout_donnees():
-    return ui.layout_columns(
-        ui.card(
-            ui.card_header("Aperçu des données"),
+    return ui.navset_card_underline(
+        ui.nav_panel("Aperçu des données",
             ui.output_data_frame("data_view"),
-            full_screen=True,
         ),
-        ui.card(
-            ui.card_header("Résumé statistique"),
+        ui.nav_panel("Résumé statistique",
             ui.output_data_frame("data_summary"),
-            full_screen=True,
         )
-    )
-
-# Page Préparer ses requêtes ----------------------------------
-
-
-def page_preparer_requetes():
-    return ui.nav_panel("Préparer ses requêtes",
-        ui.page_sidebar(
-            sidebar_requetes(),
-            bloc_ajout_requete(),
-            ui.hr(),
-            layout_suppression_requetes(),
-            ui.hr(),
-            bloc_requetes_actuelles()
-        )
-    )
-
-
-def sidebar_requetes():
-    return ui.sidebar(
-        ui.input_file("request_input", "📂 Importer un fichier JSON", accept=[".json"]),
-        ui.input_action_button("save_json", "💾 Exporter le JSON"),
-        position="right",
-        bg="#f8f8f8"
-    )
-
-
-def bloc_ajout_requete():
-    return ui.panel_well(
-        ui.h4("➕ Ajouter une requête"),
-        ui.br(),
-        ui.row(
-            ui.column(3, ui.input_selectize("type_req", "Type de requête:", choices=["Comptage", "Total", "Moyenne", "Quantile"], selected="Comptage")),
-            ui.column(3, ui.input_text("filtre", "Condition de filtrage:")),
-            ui.column(3, ui.input_text("borne_min", "Borne min:"))
-        ),
-        ui.br(),
-        ui.row(
-            ui.column(3, ui.input_selectize("variable", "Variable:", choices={}, options={"plugins": ["clear_button"]})),
-            ui.column(3, ui.input_selectize("group_by", "Regrouper par:", choices={}, multiple=True)),
-            ui.column(3, ui.input_text("borne_max", "Borne max:"))
-        ),
-        ui.br(),
-        ui.panel_conditional("input.type_req == 'Quantile'",
-            ui.row(
-                ui.column(3, ui.input_numeric("alpha", "Ordre du quantile:", 0.5, min=0, max=1, step=0.01)),
-                ui.column(3, ui.input_text("candidat", "Liste des candidats:"))
-            ),
-        ),
-        ui.br(),
-        ui.row(
-            ui.column(12,
-                ui.div(
-                    ui.input_action_button("add_req", "➕ Ajouter la requête"),
-                    class_="d-flex justify-content-end"
-                )
-            )
-        )
-    )
-
-
-def layout_suppression_requetes():
-    return ui.layout_columns(
-        ui.panel_well(
-            ui.h4("🗑️ Supprimer une requête"),
-            ui.br(),
-            ui.row(
-                ui.column(6, ui.input_selectize("delete_req", "Requêtes à supprimer:", choices={}, multiple=True))
-            ),
-            ui.row(
-                ui.column(12,
-                    ui.div(
-                        ui.input_action_button("delete_btn", "Supprimer"),
-                        class_="d-flex justify-content-end"
-                    )
-                )
-            )
-        ),
-        ui.panel_well(
-            ui.h4("🗑️ Supprimer toutes les requêtes"),
-            ui.br(),
-            ui.row(ui.column(12, ui.div(style="height: 85px"))),
-            ui.row(
-                ui.column(12,
-                    ui.div(
-                        ui.input_action_button("delete_all_btn", "Supprimer TOUT", class_="btn btn-danger"),
-                        class_="d-flex justify-content-end"
-                    )
-                )
-            )
-        )
-    )
-
-
-def bloc_requetes_actuelles():
-    return ui.panel_well(
-        ui.h4("📋 Requêtes actuelles"),
-        ui.br(),
-        ui.output_ui("req_display")
     )
 
 
@@ -285,8 +210,107 @@ def bloc_score_quantile():
         )
     )
 
-# Page Conception du budget DP ----------------------------------
 
+# Page Préparer ses requêtes ----------------------------------
+
+def page_preparer_requetes():
+    return ui.nav_panel("Préparer ses requêtes",
+        ui.page_sidebar(
+            sidebar_requetes(),
+            bloc_ajout_requete(),
+            ui.hr(),
+            layout_suppression_requetes(),
+            ui.hr(),
+            bloc_requetes_actuelles()
+        )
+    )
+
+
+def sidebar_requetes():
+    return ui.sidebar(
+        ui.input_file("request_input", "📂 Importer un fichier JSON", accept=[".json"]),
+        ui.download_button("download_json", "💾 Télécharger les requêtes (JSON)", class_="btn-outline-primary"),
+        position="right",
+        bg="#f8f8f8"
+    )
+
+
+def bloc_ajout_requete():
+    return ui.panel_well(
+        ui.h4("➕ Ajouter une requête"),
+        ui.br(),
+        ui.row(
+            ui.column(3, ui.input_selectize("type_req", "Type de requête:", choices=["Comptage", "Total", "Moyenne", "Quantile"], selected="Comptage")),
+            ui.column(3, ui.input_text("filtre", "Condition de filtrage:")),
+            ui.column(3, ui.input_text("borne_min", "Borne min:"))
+        ),
+        ui.br(),
+        ui.row(
+            ui.column(3, ui.input_selectize("variable", "Variable:", choices={}, options={"plugins": ["clear_button"]})),
+            ui.column(3, ui.input_selectize("group_by", "Regrouper par:", choices={}, multiple=True)),
+            ui.column(3, ui.input_text("borne_max", "Borne max:"))
+        ),
+        ui.br(),
+        ui.panel_conditional("input.type_req == 'Quantile'",
+            ui.row(
+                ui.column(3, ui.input_numeric("alpha", "Ordre du quantile:", 0.5, min=0, max=1, step=0.01)),
+                ui.column(3, ui.input_text("candidat", "Liste des candidats:"))
+            ),
+        ),
+        ui.br(),
+        ui.row(
+            ui.column(12,
+                ui.div(
+                    ui.input_action_button("add_req", "➕ Ajouter la requête"),
+                    class_="d-flex justify-content-end"
+                )
+            )
+        )
+    )
+
+
+def layout_suppression_requetes():
+    return ui.layout_columns(
+        ui.panel_well(
+            ui.h4("🗑️ Supprimer une requête"),
+            ui.br(),
+            ui.row(
+                ui.column(6, ui.input_selectize("delete_req", "Requêtes à supprimer:", choices={}, multiple=True))
+            ),
+            ui.row(
+                ui.column(12,
+                    ui.div(
+                        ui.input_action_button("delete_btn", "Supprimer"),
+                        class_="d-flex justify-content-end"
+                    )
+                )
+            )
+        ),
+        ui.panel_well(
+            ui.h4("🗑️ Supprimer toutes les requêtes"),
+            ui.br(),
+            ui.row(ui.column(12, ui.div(style="height: 85px"))),
+            ui.row(
+                ui.column(12,
+                    ui.div(
+                        ui.input_action_button("delete_all_btn", "Supprimer TOUT", class_="btn btn-danger"),
+                        class_="d-flex justify-content-end"
+                    )
+                )
+            )
+        )
+    )
+
+
+def bloc_requetes_actuelles():
+    return ui.panel_well(
+        ui.h4("📋 Requêtes actuelles"),
+        ui.br(),
+        ui.output_ui("req_display")
+    )
+
+
+# Page Conception du budget DP ----------------------------------
 
 def page_conception_budget():
     return ui.nav_panel("Conception du budget",
@@ -303,8 +327,11 @@ def page_conception_budget():
 
 def sidebar_budget():
     return ui.sidebar(
-        ui.h3("Répartition libre du budget"),
+        ui.h3("Définition du budget"),
         ui.input_numeric("budget_total", "Budget total :", 0.2, min=0.1, max=1, step=0.01),
+        ui.input_selectize("echelle_geo", "Echelle géographique de l'étude:", choices=regions_france, selected="France entière"),
+        ui.input_selectize("dataset_name", "Nom du dataset:", choices=dataset, selected="Penguin", options={"create": True}),
+        ui.input_action_button("valider_budget", "Valider le budget DP"),
         position="right",
         bg="#f8f8f8"
     )
@@ -355,4 +382,39 @@ def bloc_budget_quantile():
             ),
             col_widths=[4, 8]
         )
+    )
+
+
+# Page Résultat dp ----------------------------------
+
+def page_resultat_dp():
+    return ui.nav_panel("Résultat DP",
+        ui.panel_well(
+            ui.h4("Résultat des requêtes DP"),
+            ui.br(),
+            ui.div("Voici les résultats des requêtes différentes privées."),
+            ui.download_button("download_xlsx", "💾 Télécharger les résultats (XLSX)", class_="btn-outline-primary"),
+            ui.br(),
+            ui.output_ui("req_dp_display")
+        )
+    )
+
+
+# Page Etat budget dataset ----------------------------------
+
+def page_etat_budget_dataset():
+    return ui.nav_panel("Etat budget dataset",
+        ui.card(
+            ui.card_header("Aperçu des budgets dépensées"),
+            ui.output_data_frame("data_budget_view")
+        ),
+        ui.output_ui("budget_display")
+    )
+
+
+# Page A propos ----------------------------------
+
+def page_a_propos():
+    return ui.nav_panel("A propos",
+        ui.h3("À compléter...")
     )

@@ -4,13 +4,14 @@ from shiny import App, ui, render, reactive
 import pandas as pd
 import polars as pl
 from pathlib import Path
+from datetime import datetime
 import numpy as np
 from scipy.stats import norm
 import seaborn as sns
 from shinywidgets import render_widget
 from app.initialisation import update_context
 from src.process_tools import process_request_dp, process_request
-from src.fonctions import eps_from_rho_delta, affichage_requete
+from src.fonctions import eps_from_rho_delta, affichage_requete, affichage_requete_dp
 import opendp.prelude as dp
 from plots import (
     create_histo_plot, create_fc_emp_plot,
@@ -21,23 +22,21 @@ from layout import (
     page_donnees,
     page_preparer_requetes,
     page_mecanisme_dp,
-    page_conception_budget
+    page_conception_budget,
+    page_resultat_dp,
+    page_etat_budget_dataset,
+    page_a_propos
 )
 
 dp.enable_features("contrib")
 
-# --- Etat de session réactif ---
-requetes = reactive.Value({})  # Dictionnaire des requêtes
-json_source = reactive.Value("")
-
-type_req = ["Comptage", "Total", "Moyenne", "Quantile"]
 data_example = sns.load_dataset("penguins")
 
 
-def make_radio_buttons(filter_type: list[str]):
+def make_radio_buttons(request, filter_type: list[str]):
     radio_buttons = []
     priorite = {"Comptage": "2", "Total": "2", "Moyenne": "1", "Quantile": "3"}
-    for key, req in requetes().items():
+    for key, req in request.items():
         if req["type"] in filter_type:
             radio_buttons_id = key
             radio_buttons.append(
@@ -48,15 +47,12 @@ def make_radio_buttons(filter_type: list[str]):
     return radio_buttons
 
 
-def normalize_weights(input) -> dict:
+def normalize_weights(request, input) -> dict:
     radio_to_weight = {1: 1, 2: 0.5, 3: 0.25}
-    reqs = requetes()
-
     raw_weights = {
         key: radio_to_weight.get(float(getattr(input, key)()), 0)
-        for key, req in reqs.items()
+        for key, requete in request.items()
     }
-
     total = sum(raw_weights.values())
     return {k: v / total for k, v in raw_weights.items()}
 
@@ -65,18 +61,18 @@ def normalize_weights(input) -> dict:
 app_ui = ui.page_navbar(
     ui.nav_spacer(),
     page_donnees(),
-    page_preparer_requetes(),
     page_mecanisme_dp(),
+    page_preparer_requetes(),
     page_conception_budget(),
-    ui.nav_panel("Résultat DP", ui.h3("À compléter...")),
-    ui.nav_panel("Etat budget dataset", ui.h3("À compléter...")),
-    ui.nav_panel("A propos", ui.h3("À compléter...")),
+    page_resultat_dp(),
+    page_etat_budget_dataset(),
+    page_a_propos(),
     title=ui.div(
         ui.img(src="insee-logo.jpg", height="80px", style="margin-right:10px"),
         ui.div("Poc – Differential Privacy", style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 400; font-size: 28px;"),
         style="display: flex; align-items: center; gap: 10px;"
     ),
-    id="page"
+    id="page",
 )
 
 
@@ -85,12 +81,193 @@ app_ui = ui.page_navbar(
 
 def server(input, output, session):
 
+    requetes = reactive.Value({})
+    json_source = reactive.Value("")
+    page_autorisee = reactive.Value(False)
+    resultats_df = reactive.Value({})
+    onglet_actuel = reactive.Value("Conception du budget")  # Onglet par défaut
+    trigger_update_budget = reactive.Value(0)
+
+    @reactive.calc
+    def budgets_par_dataset():
+        _ = trigger_update_budget()
+        df = pd.read_csv("budget_dp.csv")
+
+        # somme budget pour France entière par dataset
+        df_france = df[df["echelle_geographique"] == "France entière"].groupby("dataset", as_index=False)["budget_dp_rho"].sum()
+        df_france = df_france.rename(columns={"budget_dp_rho": "budget_france"})
+
+        # somme budget pour chaque autre échelle par dataset
+        df_autres = df[df["echelle_geographique"] != "France entière"].groupby(["dataset", "echelle_geographique"], as_index=False)["budget_dp_rho"].sum()
+
+        # pour chaque dataset, on prend la valeur max des sommes sur les autres échelles
+        df_max_autres = df_autres.groupby("dataset", as_index=False)["budget_dp_rho"].max()
+        df_max_autres = df_max_autres.rename(columns={"budget_dp_rho": "budget_max_autres"})
+
+        # merge budgets France entière et max autres échelles (outer pour ne rien perdre)
+        df_merge = pd.merge(df_france, df_max_autres, on="dataset", how="outer").fillna(0)
+
+        # somme finale
+        df_merge["budget_dp_rho"] = df_merge["budget_france"] + df_merge["budget_max_autres"]
+
+        # on trie et on ne garde que ce qui nous intéresse
+        df_result = df_merge[["dataset", "budget_dp_rho"]].sort_values("budget_dp_rho", ascending=False)
+
+        return df_result
+
+
+    @output
+    @render.ui
+    def budget_display():
+        df_grouped = budgets_par_dataset()
+
+        boxes = []
+        for _, row in df_grouped.iterrows():
+            boxes.append(
+                ui.value_box(
+                    title=row["dataset"],
+                    value=f"{row['budget_dp_rho']:.3f}"
+                )
+            )
+
+        # Regrouper les value boxes en lignes de 4 colonnes max
+        rows = []
+        for i in range(0, len(boxes), 4):
+            row = ui.row(*[ui.column(3, box) for box in boxes[i:i+4]])
+            rows.append(row)
+
+        return ui.div(*rows)
+
+
+    @output
+    @render.data_frame
+    def data_budget_view():
+        _ = trigger_update_budget()
+        return pd.read_csv("budget_dp.csv")
+
+    @reactive.Effect
+    @reactive.event(input.confirm_validation)
+    def _():
+        page_autorisee.set(True)
+        ui.modal_remove()
+        ui.update_navs("page", selected="Résultat DP")
+
+        nouvelle_ligne = pd.DataFrame([{
+            "dataset": input.dataset_name(),
+            "echelle_geographique": input.echelle_geo(),
+            "date_ajout": datetime.now().strftime("%d/%m/%Y"),
+            "budget_dp_rho": input.budget_total()
+        }])
+
+        fichier = Path("budget_dp.csv")
+        if fichier.exists():
+            nouvelle_ligne.to_csv(fichier, mode="a", header=False, index=False, encoding="utf-8")
+        else:
+            nouvelle_ligne.to_csv(fichier, mode="w", header=True, index=False, encoding="utf-8")
+
+        ui.notification_show("✅ Ligne ajoutée à `budget_dp.csv`", type="message")
+        trigger_update_budget.set(trigger_update_budget() + 1)  # 🔄 Déclenche la mise à jour
+
+    # Stocker l'onglet actuel en réactif
+    @reactive.Effect
+    @reactive.event(input.page)
+    def on_tab_change():
+        requested_tab = input.page()
+        if requested_tab == "Résultat DP" and not page_autorisee():
+            # Afficher modal pour prévenir
+            ui.modal_show(
+                ui.modal(
+                    "Vous devez valider le budget avant d'accéder aux résultats.",
+                    title="Accès refusé",
+                    easy_close=True,
+                    footer=None
+                )
+            )
+            # Remettre l'onglet actif sur l'onglet précédent (empêche le changement)
+            ui.update_navs("page", selected=onglet_actuel())
+        else:
+            # Autoriser le changement d'onglet
+            onglet_actuel.set(requested_tab)
+
+    @reactive.Effect
+    @reactive.event(input.valider_budget)
+    def _():
+        ui.modal_show(
+            ui.modal(
+                "Êtes-vous sûr de vouloir valider le budget ? Cette action est irréversible.",
+                title="Confirmation",
+                easy_close=False,
+                footer=ui.TagList(
+                    ui.input_action_button("confirm_validation", "Valider", class_="btn-danger"),
+                    ui.input_action_button("cancel_validation", "Annuler", class_="btn-secondary")
+                )
+            )
+        )
+
+    @reactive.Effect
+    @reactive.event(input.cancel_validation)
+    def _():
+        ui.modal_remove()
+
+    @output
+    @render.ui
+    @reactive.event(input.confirm_validation)
+    async def req_dp_display():
+        data_requetes = requetes()
+        weights = normalize_weights(requetes(), input)
+
+        poids_requetes_rho = [
+            weights[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] != "Quantile"
+        ]
+
+        poids_requetes_quantile = [
+            weights[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] == "Quantile"
+        ]
+
+        context_param = {
+            "data": pl.from_pandas(dataset()).lazy(),
+            "privacy_unit": dp.unit_of(contributions=1),
+            "margins": [dp.polars.Margin(max_partition_length=10000)],
+        }
+
+        context_rho, context_eps = update_context(
+            context_param, input.budget_total(), poids_requetes_rho, poids_requetes_quantile
+        )
+
+        # --- Barre de progression ---
+        with ui.Progress(min=0, max=len(data_requetes)) as p:
+            p.set(0, message="Traitement en cours...", detail="Analyse requête par requête...")
+            affichage = await affichage_requete_dp(context_rho, context_eps, key_values(), data_requetes, p, resultats_df)
+
+        return affichage
+
+    @output
+    @render.download(filename=lambda: "resultats_dp.xlsx")
+    def download_xlsx():
+        import io
+        import pandas as pd
+
+        resultats = resultats_df()
+
+        buffer = io.BytesIO()
+
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            for key, df in resultats.items():
+                df.to_excel(writer, sheet_name=str(key)[:31], index=False)
+
+        buffer.seek(0)
+        return buffer
+
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
     def radio_buttons_comptage():
         return ui.layout_columns(
-            *make_radio_buttons(["Comptage"]),
+            *make_radio_buttons(requetes(), ["Comptage"]),
             col_widths=3
         )
 
@@ -99,7 +276,7 @@ def server(input, output, session):
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
     def radio_buttons_total_moyenne():
         return ui.layout_columns(
-            *make_radio_buttons(["Total", "Moyenne"]),
+            *make_radio_buttons(requetes(), ["Total", "Moyenne"]),
             col_widths=3
         )
 
@@ -108,7 +285,7 @@ def server(input, output, session):
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
     def radio_buttons_quantile():
         return ui.layout_columns(
-            *make_radio_buttons(["Quantile"]),
+            *make_radio_buttons(requetes(), ["Quantile"]),
             col_widths=3
         )
 
@@ -117,12 +294,11 @@ def server(input, output, session):
         df = pd.DataFrame(X_count())
         return create_barplot(df, x_col="requête", y_col="écart_type")
 
-
     @render_widget
     def plot_total_moyenne():
         df = pd.DataFrame(X_total_moyenne())
-        df = df.explode("cv (%)").reset_index(drop=True)
-
+        if not df.empty:
+            df = df.explode("cv (%)").reset_index(drop=True)
         return create_scatterplot(df, x_col="cv (%)", y_col="requête", size_col="cv (%)")
 
     @render_widget
@@ -130,14 +306,12 @@ def server(input, output, session):
         df = pd.DataFrame(X_quantile())
         return create_barplot(df, x_col="requête", y_col="candidats")
 
-    
     @reactive.Calc
     def X_count():
-        weights = normalize_weights(input)
+        weights = normalize_weights(requetes(), input)
         results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["count", "comptage"]}
-
-        for i, (key, req) in enumerate(reqs.items()):
+        for i, (key, request) in enumerate(reqs.items()):
             poids = list(weights.values())
             if poids:
                 # mettre le poids courant en premier
@@ -151,7 +325,7 @@ def server(input, output, session):
 
             context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
 
-            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
             scale = resultat_dp.precision()["scale"][0]
             results.append({"requête": key, "écart_type": scale})
 
@@ -160,11 +334,10 @@ def server(input, output, session):
     
     @reactive.Calc
     def X_total_moyenne():
-        weights = normalize_weights(input)
+        weights = normalize_weights(requetes(), input)
         results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["total", "moyenne"]}
-
-        for i, (key, req) in enumerate(reqs.items()):
+        for i, (key, request) in enumerate(reqs.items()):
             poids = list(weights.values())
             if poids:
                 # mettre le poids courant en premier
@@ -178,16 +351,16 @@ def server(input, output, session):
 
             context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
 
-            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
-            if req["type"] == "sum" or req["type"] == "Total":
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
+            if request["type"] == "sum" or request["type"] == "Total":
                 scale = resultat_dp.precision()["scale"]
-                resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
+                resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
                 list_cv = 100 * scale[0]/resultat["sum"]
                 results.append({"requête": key, "cv (%)": list_cv})
 
-            if req["type"] == "mean" or req["type"] == "Moyenne":
+            if request["type"] == "mean" or request["type"] == "Moyenne":
                 scale_tot, scale_len = resultat_dp.precision()["scale"]
-                resultat = process_request(pl.from_pandas(dataset()).lazy(), req)
+                resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
                 list_cv_tot = scale_tot/resultat["sum"]
                 list_cv_len = scale_len/resultat["count"]
                 list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
@@ -197,11 +370,10 @@ def server(input, output, session):
 
     @reactive.Calc
     def X_quantile():
-        weights = normalize_weights(input)
+        weights = normalize_weights(requetes(), input)
         results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["quantile"]}
-
-        for i, (key, req) in enumerate(reqs.items()):
+        for i, (key, request) in enumerate(reqs.items()):
             poids = list(weights.values())
             if poids:
                 # mettre le poids courant en premier
@@ -215,7 +387,7 @@ def server(input, output, session):
 
             context_rho, context_eps = update_context(context_param, input.budget_total(), [], poids)
 
-            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), req)
+            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
             nb_candidat = resultat_dp.precision(
                 data=pl.from_pandas(dataset()).lazy(),
                 epsilon=np.sqrt(8 * input.budget_total() * sum(poids)) * poids[0]
@@ -303,13 +475,16 @@ def server(input, output, session):
             except json.JSONDecodeError:
                 ui.notification_show("❌ Fichier JSON invalide", type="error")
 
-    @reactive.effect
-    @reactive.event(input.save_json)
-    def _():
-        save_path = "requetes_exportées.json"
-        with open(save_path, "w", encoding="utf-8") as f:
-            json.dump(requetes(), f, indent=2, ensure_ascii=False)
-        ui.notification_show(f"✅ Requêtes exportées dans `{save_path}`", type="message")
+    @output
+    @render.download(filename=lambda: "requetes_exportees.json")
+    def download_json():
+        import io
+        import json
+
+        buffer = io.StringIO()
+        json.dump(requetes(), buffer, indent=2, ensure_ascii=False)
+        buffer.seek(0)
+        return buffer
 
     @reactive.effect
     @reactive.event(input.add_req)
