@@ -11,7 +11,7 @@ import seaborn as sns
 from shinywidgets import render_widget
 from app.initialisation import update_context
 from src.process_tools import process_request_dp, process_request
-from src.fonctions import eps_from_rho_delta, affichage_requete, affichage_requete_dp
+from src.fonctions import eps_from_rho_delta, affichage_requete, affichage_requete_dp, optimiser_budget_dp
 import opendp.prelude as dp
 from plots import (
     create_histo_plot, create_fc_emp_plot,
@@ -27,6 +27,7 @@ from layout import (
     page_etat_budget_dataset,
     page_a_propos
 )
+from collections import defaultdict
 
 dp.enable_features("contrib")
 
@@ -55,6 +56,43 @@ def normalize_weights(request, input) -> dict:
     }
     total = sum(raw_weights.values())
     return {k: v / total for k, v in raw_weights.items()}
+
+
+def organiser_par_by(dico_requetes, dico_valeurs):
+    result = defaultdict(dict)
+    for req, params in dico_requetes.items():
+        # clé selon existence et contenu de 'by'
+        if 'by' not in params:
+            key = 'tot'
+        else:
+            by = params['by']
+            # gérer le cas où by est une string au lieu d'une liste
+            if isinstance(by, str):
+                key = by
+            elif isinstance(by, list):
+                if len(by) == 1:
+                    key = by[0]
+                else:
+                    key = tuple(by)
+            else:
+                # cas imprévu, on met en tot par défaut
+                key = 'tot'
+        
+        # ajouter la valeur correspondante si elle existe dans dico_valeurs
+        if req in dico_valeurs:
+            result[key] = dico_valeurs[req]
+    
+    return dict(result)
+
+
+def count_modalities(df):
+    if df is None:
+        return {}
+    # Sélection des colonnes qualitatives
+    qualitative_cols = df.select_dtypes(include=["object", "category", "bool"]).columns
+    # Calcul du nombre de modalités par variable
+    result = {col: df[col].nunique(dropna=True) for col in qualitative_cols}
+    return result
 
 
 # 1. UI --------------------------------------
@@ -94,27 +132,26 @@ def server(input, output, session):
         df = pd.read_csv("budget_dp.csv")
 
         # somme budget pour France entière par dataset
-        df_france = df[df["echelle_geographique"] == "France entière"].groupby("dataset", as_index=False)["budget_dp_rho"].sum()
+        df_france = df[df["echelle_geographique"] == "France entière"].groupby("nom_dataset", as_index=False)["budget_dp_rho"].sum()
         df_france = df_france.rename(columns={"budget_dp_rho": "budget_france"})
 
         # somme budget pour chaque autre échelle par dataset
-        df_autres = df[df["echelle_geographique"] != "France entière"].groupby(["dataset", "echelle_geographique"], as_index=False)["budget_dp_rho"].sum()
+        df_autres = df[df["echelle_geographique"] != "France entière"].groupby(["nom_dataset", "echelle_geographique"], as_index=False)["budget_dp_rho"].sum()
 
         # pour chaque dataset, on prend la valeur max des sommes sur les autres échelles
-        df_max_autres = df_autres.groupby("dataset", as_index=False)["budget_dp_rho"].max()
+        df_max_autres = df_autres.groupby("nom_dataset", as_index=False)["budget_dp_rho"].max()
         df_max_autres = df_max_autres.rename(columns={"budget_dp_rho": "budget_max_autres"})
 
         # merge budgets France entière et max autres échelles (outer pour ne rien perdre)
-        df_merge = pd.merge(df_france, df_max_autres, on="dataset", how="outer").fillna(0)
+        df_merge = pd.merge(df_france, df_max_autres, on="nom_dataset", how="outer").fillna(0)
 
         # somme finale
         df_merge["budget_dp_rho"] = df_merge["budget_france"] + df_merge["budget_max_autres"]
 
         # on trie et on ne garde que ce qui nous intéresse
-        df_result = df_merge[["dataset", "budget_dp_rho"]].sort_values("budget_dp_rho", ascending=False)
+        df_result = df_merge[["nom_dataset", "budget_dp_rho"]].sort_values("budget_dp_rho", ascending=False)
 
         return df_result
-
 
     @output
     @render.ui
@@ -125,7 +162,7 @@ def server(input, output, session):
         for _, row in df_grouped.iterrows():
             boxes.append(
                 ui.value_box(
-                    title=row["dataset"],
+                    title=row["nom_dataset"],
                     value=f"{row['budget_dp_rho']:.3f}"
                 )
             )
@@ -137,7 +174,6 @@ def server(input, output, session):
             rows.append(row)
 
         return ui.div(*rows)
-
 
     @output
     @render.data_frame
@@ -153,7 +189,7 @@ def server(input, output, session):
         ui.update_navs("page", selected="Résultat DP")
 
         nouvelle_ligne = pd.DataFrame([{
-            "dataset": input.dataset_name(),
+            "nom_dataset": input.dataset_name(),
             "echelle_geographique": input.echelle_geo(),
             "date_ajout": datetime.now().strftime("%d/%m/%Y"),
             "budget_dp_rho": input.budget_total()
@@ -309,24 +345,20 @@ def server(input, output, session):
     @reactive.Calc
     def X_count():
         weights = normalize_weights(requetes(), input)
-        results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["count", "comptage"]}
+        poids = organiser_par_by(reqs, weights)
+        nb_modalite = count_modalities(dataset())
+        poids_comptage = {k: v for k, v in weights.items() if k in reqs.keys()}
+        optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
+
+        results = []
         for i, (key, request) in enumerate(reqs.items()):
             poids = list(weights.values())
             if poids:
                 # mettre le poids courant en premier
                 poids[0], poids[i] = poids[i], poids[0]
 
-            context_param = {
-                "data": pl.from_pandas(dataset()).lazy(),
-                "privacy_unit": dp.unit_of(contributions=1),
-                "margins": [dp.polars.Margin(max_partition_length=10000)],
-            }
-
-            context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
-
-            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
-            scale = resultat_dp.precision()["scale"][0]
+            scale = 1 / np.sqrt(2 * input.budget_total() * poids[0])
             results.append({"requête": key, "écart_type": scale})
 
         return results
@@ -342,24 +374,17 @@ def server(input, output, session):
             if poids:
                 # mettre le poids courant en premier
                 poids[0], poids[i] = poids[i], poids[0]
-
-            context_param = {
-                "data": pl.from_pandas(dataset()).lazy(),
-                "privacy_unit": dp.unit_of(contributions=1),
-                "margins": [dp.polars.Margin(max_partition_length=10000)],
-            }
-
-            context_rho, context_eps = update_context(context_param, input.budget_total(), poids, [])
-
-            resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
+                
+            v_min, v_max = request["bounds"]
             if request["type"] == "sum" or request["type"] == "Total":
-                scale = resultat_dp.precision()["scale"]
+                scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids[0])
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
-                list_cv = 100 * scale[0]/resultat["sum"]
+                list_cv = 100 * scale/resultat["sum"]
                 results.append({"requête": key, "cv (%)": list_cv})
 
             if request["type"] == "mean" or request["type"] == "Moyenne":
-                scale_tot, scale_len = resultat_dp.precision()["scale"]
+                scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids[0])
+                scale_len = 1 / np.sqrt(input.budget_total() * poids[0])
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
                 list_cv_tot = scale_tot/resultat["sum"]
                 list_cv_len = scale_len/resultat["count"]
@@ -390,7 +415,7 @@ def server(input, output, session):
             resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
             nb_candidat = resultat_dp.precision(
                 data=pl.from_pandas(dataset()).lazy(),
-                epsilon=np.sqrt(8 * input.budget_total() * sum(poids)) * poids[0]
+                epsilon=np.sqrt(8 * input.budget_total() * poids[0])
             )
             results.append({"requête": key, "candidats": nb_candidat})
 
@@ -472,6 +497,7 @@ def server(input, output, session):
                     data = json.load(f)
                 requetes.set(data)
                 json_source.set(filepath.name)
+                ui.update_selectize("delete_req", choices=list(data.keys()))
             except json.JSONDecodeError:
                 ui.notification_show("❌ Fichier JSON invalide", type="error")
 
