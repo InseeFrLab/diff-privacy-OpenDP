@@ -11,7 +11,7 @@ import asyncio
 import opendp.prelude as dp
 
 
-async def affichage_requete_dp_spec(context_comptage, context_moyenne_total, context_quantile, key_values, requetes, progress, results_store):
+async def affichage_requete_dp_spec(context_comptage, context_moyenne_total, context_quantile, key_values, requetes, progress, results_store, poids_estimateur):
     from src.process_tools import process_request_dp_spec
     panels = []
 
@@ -102,7 +102,9 @@ def update_context_spec(CONTEXT_PARAM, budget_total, budget_comptage, poids_requ
 
     return context_comptage, context_moyenne_total, context_quantile
 
+
 def calcul_budget_rho_effectif(variance, nb_modalite):
+
 
     # Paramètres fixes
     variance_tricell = {k: v for k, v in variance.items() if len(k) == 3 and isinstance(k, tuple)}
@@ -118,13 +120,18 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
     croisement_1_1 = [k for k in variance_marge_var.keys()]
     croisement_0 = variance_marge_tot
 
+    poids_estimateur = {k: {} for k in variance if len(k) != 3 or not isinstance(k, tuple)}
+    poids_estimateur.update(variance_tricell)
+
     for croisement_2_a, croisement_2_b in croisement_2_2:  # Pour chaque tableau 2x2
 
         somme_inverse_var_marge_tricell = 0
         for croisement_3 in croisement_3_3:
             if croisement_2_a in croisement_3 and croisement_2_b in croisement_3:
                 autre_var = [x for x in croisement_3 if x != croisement_2_a and x != croisement_2_b][0]
-                somme_inverse_var_marge_tricell += 1 / (nb_modalite[autre_var] * variance_tricell[tuple(croisement_3)])
+                inverse_var_croisement_3 = 1 / (nb_modalite[autre_var] * variance_tricell[tuple(croisement_3)])
+                somme_inverse_var_marge_tricell += inverse_var_croisement_3
+                poids_estimateur[croisement_2_a, croisement_2_b][tuple(croisement_3)] = inverse_var_croisement_3
 
         if (1/variance_cell[croisement_2_a, croisement_2_b] - somme_inverse_var_marge_tricell) <= 0:
             variance_cellule_precise = 1 / somme_inverse_var_marge_tricell
@@ -134,7 +141,9 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
             variance[croisement_2_a, croisement_2_b] = variance_cellule_precise
 
         else:
-            variance_req_cellule[croisement_2_a, croisement_2_b] = 1 / ( (1 / variance_cell[croisement_2_a, croisement_2_b]) - somme_inverse_var_marge_tricell)
+            var_req = 1 / ( (1 / variance_cell[croisement_2_a, croisement_2_b]) - somme_inverse_var_marge_tricell)
+            variance_req_cellule[croisement_2_a, croisement_2_b] = var_req
+            poids_estimateur[croisement_2_a, croisement_2_b]["requête"] = 1 / var_req
 
     for i in croisement_1_1:
         somme_inverse_var_marge_tricell = 0
@@ -144,16 +153,22 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
                 autres_indices = [j for j in croisement_3 if j != i]
                 i_1, i_2 = autres_indices
 
-                somme_inverse_var_marge_tricell += (
+                inverse_var_croisement_3 = (
                     1 / (nb_modalite[i_1] * nb_modalite[i_2] * variance_tricell[tuple(croisement_3)])
                 )
+
+                somme_inverse_var_marge_tricell += inverse_var_croisement_3
+
+                poids_estimateur[i][tuple(croisement_3)] = inverse_var_croisement_3
 
         somme_inverse_var_marge_cell = 0
 
         for (croisement_2_a, croisement_2_b), variance_cell in variance_req_cellule.items():
             if i in (croisement_2_a, croisement_2_b) and variance_cell > 0:
                 autre_var = croisement_2_a if croisement_2_b == i else croisement_2_b
-                somme_inverse_var_marge_cell += 1 / (nb_modalite[autre_var] * variance_cell)       
+                inverse_var_croisement_2 = 1 / (nb_modalite[autre_var] * variance_cell) 
+                somme_inverse_var_marge_cell += inverse_var_croisement_2
+                poids_estimateur[i][croisement_2_a, croisement_2_b] = inverse_var_croisement_2    
 
         if (1/variance_marge_var[i] - somme_inverse_var_marge_cell - somme_inverse_var_marge_tricell) <= 0:
             variance_marge_var_precise = 1 / (somme_inverse_var_marge_cell + somme_inverse_var_marge_tricell)
@@ -163,35 +178,43 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
             variance[i] = variance_marge_var_precise
 
         else:
-            variance_req_marge_var[i] = 1 / (1/variance_marge_var[i] - somme_inverse_var_marge_cell - somme_inverse_var_marge_tricell)
+            var_req = 1 / (1/variance_marge_var[i] - somme_inverse_var_marge_cell - somme_inverse_var_marge_tricell)
+            variance_req_marge_var[i] = var_req
+            poids_estimateur[i]["requête"] = 1 / var_req
 
     if croisement_0:
-        somme_inverse_var_tot_tricell = sum(
-            1 / (nb_modalite[var_1] * nb_modalite[var_2] * nb_modalite[var_3] * variance_tricell[var_1, var_2, var_3])
-            for var_1, var_2, var_3 in croisement_3_3
-        )
 
-        somme_inverse_var_tot_cell = sum(
-            1 / (nb_modalite[var_1] * nb_modalite[var_2] * variance_req_cellule[var_1, var_2])
-            for var_1, var_2 in croisement_2_2
-            if variance_req_cellule[var_1, var_2] > 0
-        )
+        somme_inverse_var_tot_tricell = 0
+        for var_1, var_2, var_3 in croisement_3_3:
+            inverse_var_croisement_3 = 1 / (nb_modalite[var_1] * nb_modalite[var_2] * nb_modalite[var_3] * variance_tricell[var_1, var_2, var_3])
+            poids_estimateur["Total"][var_1, var_2, var_3] = inverse_var_croisement_3
+            somme_inverse_var_tot_tricell += inverse_var_croisement_3
 
-        somme_inverse_var_tot_marge = sum(
-            1 / (nb_modalite[i] * variance_req_marge_var[i])
-            for i in croisement_1_1
-            if variance_req_marge_var[i] > 0
-        )
+        somme_inverse_var_tot_cell = 0
+        for var_1, var_2 in croisement_2_2:
+            if variance_req_cellule[var_1, var_2] > 0:
+                inverse_var_croisement_2 = 1 / (nb_modalite[var_1] * nb_modalite[var_2] * variance_req_cellule[var_1, var_2])
+                poids_estimateur["Total"][var_1, var_2] = inverse_var_croisement_2
+                somme_inverse_var_tot_cell += inverse_var_croisement_2
+
+        somme_inverse_var_tot_marge = 0
+        for i in croisement_1_1:
+            if variance_req_marge_var[i] > 0:
+                inverse_var_croisement_1 = 1 / (nb_modalite[i] * variance_req_marge_var[i])
+                poids_estimateur["Total"][i] = inverse_var_croisement_1
+                somme_inverse_var_tot_marge += inverse_var_croisement_1
 
         if (1/variance_marge_tot - somme_inverse_var_tot_tricell - somme_inverse_var_tot_cell - somme_inverse_var_tot_marge) <= 0:
             variance_marge_tot_precise = 1 / (somme_inverse_var_tot_marge + somme_inverse_var_tot_cell + somme_inverse_var_tot_tricell)
             scale_bruit = np.sqrt(variance_marge_tot - variance_marge_tot_precise)
             print(f"Aie on est trop précis pour la marge tot ({round(np.sqrt(variance_marge_tot_precise),1)}), il faut injecté un bruit de {round(scale_bruit,1)}")
             variance_req_marge_tot = 0
-            variance["tot"] = variance_marge_tot_precise
+            variance["Total"] = variance_marge_tot_precise
 
         else:
-            variance_req_marge_tot = 1 / (1/variance_marge_tot - somme_inverse_var_tot_marge - somme_inverse_var_tot_cell - somme_inverse_var_tot_tricell)
+            var_req = 1 / (1/variance_marge_tot - somme_inverse_var_tot_marge - somme_inverse_var_tot_cell - somme_inverse_var_tot_tricell)
+            variance_req_marge_tot = var_req
+            poids_estimateur["Total"]["requête"] = 1 / var_req
 
     else:
         variance_req_marge_tot = 0
@@ -222,7 +245,7 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
     {variance_effective}
     """)
 
-    return rho, variance, variance_effective
+    return rho, variance, variance_effective, poids_estimateur
 
 
 def optimiser_budget_dp(budget_rho, nb_modalite, poids, alpha=1/100):
@@ -232,17 +255,17 @@ def optimiser_budget_dp(budget_rho, nb_modalite, poids, alpha=1/100):
     variance = {k: 1/(2 * poids * budget_rho) for k, poids in poids.items()}
 
     rho_supp = budget_rho
-    rho, variance_atteinte, variance_req = calcul_budget_rho_effectif(variance, nb_modalite)
-    last_valid_variance, last_variance_req = variance_atteinte, variance_req
+    rho, variance_atteinte, variance_req, poids_estimateur = calcul_budget_rho_effectif(variance, nb_modalite)
+    last_valid_variance, last_variance_req, last_poids_estimateur = variance_atteinte, variance_req, poids_estimateur
 
     while rho < budget_rho:
-        last_valid_variance, last_variance_req = variance_atteinte, variance_req
+        last_valid_variance, last_variance_req, last_poids_estimateur = variance_atteinte, variance_req, poids_estimateur
         rho_supp = rho_supp + rho * alpha
         variance = {k: 1/(2 * poids * rho_supp) for k, poids in poids.items()}
 
-        rho, variance_atteinte, variance_req = calcul_budget_rho_effectif(variance, nb_modalite)
+        rho, variance_atteinte, variance_req, poids_estimateur = calcul_budget_rho_effectif(variance, nb_modalite)
 
-    return last_valid_variance, last_variance_req
+    return last_valid_variance, last_variance_req, last_poids_estimateur
 
 
 def affichage_requete(requetes, dataset):

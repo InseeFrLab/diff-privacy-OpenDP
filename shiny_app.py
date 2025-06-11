@@ -307,7 +307,7 @@ def server(input, output, session):
 
     @render_widget
     def plot_comptage():
-        result, _ = X_count()
+        result, _, _ = X_count()
         df = pd.DataFrame(result)
         return create_barplot(df, x_col="requête", y_col="écart type", hoover="variable")
 
@@ -337,14 +337,14 @@ def server(input, output, session):
         poids, lien = organiser_par_by(reqs, weights)
         nb_modalite = count_modalities(dataset())
         poids_comptage = {k: v for k, v in weights.items() if k in reqs.keys()}
-        variance_atteinte, variance_req = optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
+        variance_atteinte, variance_req, poids_estimateur = optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
         poids_comptage = {lien[k]: v for k, v in variance_req.items() if k in lien}
         results = []
         for i, (key, request) in enumerate(lien.items()):
             scale = np.sqrt(variance_atteinte[key])
             results.append({"requête": request, "écart type": scale, "variable": key})
-
-        return results, poids_comptage
+        print(poids_estimateur)
+        return results, poids_comptage, poids_estimateur
 
     @reactive.Calc
     def X_total():
@@ -413,7 +413,7 @@ def server(input, output, session):
         data_requetes = requetes()
         weights = normalize_weights(requetes(), input)
 
-        _, poids_requetes_comptage_special = X_count()
+        _, poids_requetes_comptage_special, poids_estimateur = X_count()
 
         poids_requetes_comptage_special = [
             poids_requetes_comptage_special[clef]
@@ -454,7 +454,7 @@ def server(input, output, session):
         # --- Barre de progression ---
         with ui.Progress(min=0, max=len(data_requetes)) as p:
             p.set(0, message="Traitement en cours...", detail="Analyse requête par requête...")
-            affichage = await affichage_requete_dp_spec(context_comptage, context_moy_tot, context_quantile, key_values(), data_requetes, p, resultats_df)
+            affichage = await affichage_requete_dp_spec(context_comptage, context_moy_tot, context_quantile, key_values(), data_requetes, p, resultats_df, poids_estimateur)
 
         return affichage
 

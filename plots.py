@@ -93,7 +93,7 @@ def create_barplot(df, x_col, y_col, hoover=None):
                 else:
                     val_text = str(val)
                 hover_texts.append(f"{cross}<br>{y_col}: {val_text}")
-                
+
                 # Déterminer la couleur
                 if cross == "Total":
                     colors.append("darkgreen")
