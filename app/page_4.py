@@ -132,7 +132,7 @@ with tab1:
             count_quantile += 1
             poids_requetes_quantile[0], poids_requetes_quantile[count_quantile] = poids_requetes_quantile[count_quantile], poids_requetes_quantile[0]
 
-        (context_rho, context_eps) = update_context(rho_budget, poids_requetes_rho, poids_requetes_quantile)
+        (context_rho, context_eps) = update_context(st.session_state.context_param, rho_budget, poids_requetes_rho, poids_requetes_quantile)
 
         resultat_dp = process_request_dp(context_rho, context_eps, key_values, req)
 
@@ -156,7 +156,7 @@ with tab1:
 
         else:  # quantile
             nb_candidat = resultat_dp.precision(
-                data=st.session_state.df,
+                data=st.session_state.df.lazy(),
                 epsilon=np.sqrt(8 * rho_budget * sum(poids_requetes_quantile)) * poids_requetes_quantile[0]
             )
             resultats_quantile.append({"requête": key, "candidats": nb_candidat})

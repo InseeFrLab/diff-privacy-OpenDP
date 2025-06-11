@@ -46,7 +46,12 @@ def sidebar_donnees():
         ui.input_select(
             "default_dataset",
             "Choisir un jeu de données prédéfini:",
-            {"penguins": "Palmer Penguins"}
+            {
+                "penguins": "Palmer Penguins", 
+                "s3://gferey/diffusion/synthetic-filo/METRO/households/households_METRO.parquet": "Foyers Métropole",
+                "s3://gferey/diffusion/synthetic-filo/974/households/households_974.parquet": "Foyers Réunion",
+                "s3://gferey/diffusion/synthetic-filo/974/population/population_974.parquet": "Population Réunion"
+            }
         ),
         ui.input_file("dataset_input", "Ou importer un fichier CSV ou Parquet", accept=[".csv", ".parquet"]),
         position='right',
@@ -318,7 +323,9 @@ def page_conception_budget():
             sidebar_budget(),
             bloc_budget_comptage(),
             ui.hr(),
-            bloc_budget_total_moyenne(),
+            bloc_budget_total(),
+            ui.hr(),
+            bloc_budget_moyenne(),
             ui.hr(),
             bloc_budget_quantile()
         )
@@ -353,15 +360,30 @@ def bloc_budget_comptage():
     )
 
 
-def bloc_budget_total_moyenne():
+def bloc_budget_total():
     return ui.panel_well(
         ui.layout_columns(
             ui.card(
-                ui.card_header("Répartition du budget pour les totaux et les moyennes"),
-                ui.output_ui("radio_buttons_total_moyenne"),
+                ui.card_header("Répartition du budget pour les totaux"),
+                ui.output_ui("radio_buttons_total"),
             ),
             ui.card(
-                output_widget("plot_total_moyenne"),
+                output_widget("plot_total"),
+                full_screen=True
+            ),
+            col_widths=[4, 8]
+        )
+    )
+
+def bloc_budget_moyenne():
+    return ui.panel_well(
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Répartition du budget pour les moyennes"),
+                ui.output_ui("radio_buttons_moyenne"),
+            ),
+            ui.card(
+                output_widget("plot_moyenne"),
                 full_screen=True
             ),
             col_widths=[4, 8]

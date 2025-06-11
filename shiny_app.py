@@ -29,6 +29,14 @@ from layout import (
     page_a_propos
 )
 from collections import defaultdict
+import os, s3fs
+
+fs = s3fs.S3FileSystem(
+    client_kwargs={'endpoint_url': 'https://'+'minio.lab.sspcloud.fr'},
+    key=os.environ["AWS_ACCESS_KEY_ID"],
+    secret=os.environ["AWS_SECRET_ACCESS_KEY"],
+    token=os.environ["AWS_SESSION_TOKEN"]
+)
 
 dp.enable_features("contrib")
 
@@ -65,7 +73,7 @@ def organiser_par_by(dico_requetes, dico_valeurs):
     for req, params in dico_requetes.items():
         # clé selon existence et contenu de 'by'
         if 'by' not in params:
-            key = 'tot'
+            key = 'Total'
         else:
             by = params['by']
             # gérer le cas où by est une string au lieu d'une liste
@@ -78,7 +86,7 @@ def organiser_par_by(dico_requetes, dico_valeurs):
                     key = tuple(by)
             else:
                 # cas imprévu, on met en tot par défaut
-                key = 'tot'
+                key = 'Total'
 
         # ajouter la valeur correspondante si elle existe dans dico_valeurs
         if req in dico_valeurs:
@@ -273,9 +281,18 @@ def server(input, output, session):
     @output
     @render.ui
     @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
-    def radio_buttons_total_moyenne():
+    def radio_buttons_total():
         return ui.layout_columns(
-            *make_radio_buttons(requetes(), ["Total", "Moyenne"]),
+            *make_radio_buttons(requetes(), ["Total"]),
+            col_widths=3
+        )
+
+    @output
+    @render.ui
+    @reactive.event(input.request_input, input.add_req, input.delete_btn, input.delete_all_btn)
+    def radio_buttons_moyenne():
+        return ui.layout_columns(
+            *make_radio_buttons(requetes(), ["Moyenne"]),
             col_widths=3
         )
 
@@ -295,11 +312,18 @@ def server(input, output, session):
         return create_barplot(df, x_col="requête", y_col="écart type", hoover="variable")
 
     @render_widget
-    def plot_total_moyenne():
-        df = pd.DataFrame(X_total_moyenne())
+    def plot_total():
+        df = pd.DataFrame(X_total())
         if not df.empty:
             df = df.explode("cv (%)").reset_index(drop=True)
         return create_scatterplot(df, x_col="cv (%)", y_col="requête", size_col="cv (%)")
+
+    @render_widget
+    def plot_moyenne():
+        df = pd.DataFrame(X_moyenne())
+        if not df.empty:
+            df = df.explode(["cv (%)", "cv_tot (%)", "cv_len (%)"]).reset_index(drop=True)
+        return create_scatterplot(df, x_col="cv_tot (%)", y_col="cv_len (%)", size_col="cv (%)")
 
     @render_widget
     def plot_quantile():
@@ -323,28 +347,37 @@ def server(input, output, session):
         return results, poids_comptage
 
     @reactive.Calc
-    def X_total_moyenne():
+    def X_total():
         weights = normalize_weights(requetes(), input)
         results = []
-        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["total", "moyenne"]}
+        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["total"]}
         for i, (key, request) in enumerate(reqs.items()):
             poids = weights[key]
             v_min, v_max = request["bounds"]
 
-            if request["type"] == "sum" or request["type"] == "Total":
-                scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids)
-                resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
-                list_cv = 100 * scale/resultat["sum"]
-                results.append({"requête": key, "cv (%)": list_cv})
+            scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids)
+            resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
+            list_cv = 100 * scale/resultat["sum"]
+            results.append({"requête": key, "cv (%)": list_cv})
 
-            if request["type"] == "mean" or request["type"] == "Moyenne":
-                scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids)
-                scale_len = 1 / np.sqrt(input.budget_total() * poids)
-                resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
-                list_cv_tot = scale_tot/resultat["sum"]
-                list_cv_len = scale_len/resultat["count"]
-                list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
-                results.append({"requête": key, "cv (%)": list_cv})
+        return results
+
+    @reactive.Calc
+    def X_moyenne():
+        weights = normalize_weights(requetes(), input)
+        results = []
+        reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["moyenne"]}
+        for i, (key, request) in enumerate(reqs.items()):
+            poids = weights[key]
+            v_min, v_max = request["bounds"]
+
+            scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids)
+            scale_len = 1 / np.sqrt(input.budget_total() * poids)
+            resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
+            list_cv_tot = scale_tot/resultat["sum"]
+            list_cv_len = scale_len/resultat["count"]
+            list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
+            results.append({"requête": key, "cv (%)": list_cv, "cv_tot (%)": 100 * list_cv_tot, "cv_len (%)": 100 * list_cv_len})
 
         return results
 
@@ -440,7 +473,10 @@ def server(input, output, session):
             else:
                 raise ValueError("Format non supporté : utiliser CSV ou Parquet")
         else:
-            return sns.load_dataset(input.default_dataset())
+            if input.default_dataset() == "penguins":
+                return sns.load_dataset(input.default_dataset()).dropna()
+            else:
+                return pd.read_parquet(input.default_dataset(), filesystem=fs)
 
     # Afficher le dataset
     @output
@@ -516,21 +552,16 @@ def server(input, output, session):
     @reactive.event(input.add_req)
     def _():
         current = requetes()
-        i = 1
-        while f"req_{i}" in current:
-            i += 1
-        new_id = f"req_{i}"
 
         raw_min = input.borne_min()
         raw_max = input.borne_max()
-
         bounds = [float(raw_min), float(raw_max)] if raw_min != "" and raw_max != "" else None
 
         base_dict = {
             "type": input.type_req(),
             "variable": input.variable(),
             "bounds": bounds,
-            "by": input.group_by(),
+            "by": sorted(input.group_by()),  # 🔁 tri pour éviter les doublons d’ordre différent
             "filtre": input.filtre(),
         }
 
@@ -540,10 +571,38 @@ def server(input, output, session):
                 "candidat": input.candidat(),
             })
 
-        current[new_id] = {
+        # Nettoyage des valeurs nulles ou vides
+        clean_dict = {
             k: v for k, v in base_dict.items()
             if v not in [None, "", (), ["", ""]]
         }
+
+        # 🔍 Vérifier si la même requête existe déjà
+        if any(
+            existing_req.get("type") == clean_dict.get("type") and
+            existing_req.get("variable") == clean_dict.get("variable") and
+            existing_req.get("bounds") == clean_dict.get("bounds") and
+            existing_req.get("by", []) == clean_dict.get("by", []) and
+            existing_req.get("filtre") == clean_dict.get("filtre") and
+            (
+                input.type_req() != "Quantile" or (
+                    existing_req.get("alpha") == clean_dict.get("alpha") and
+                    existing_req.get("candidat") == clean_dict.get("candidat")
+                )
+            )
+            for existing_req in current.values()
+        ):
+            ui.notification_show("❌ Requête déjà existante (mêmes paramètres)", type="error")
+            return  # ❌ On quitte sans ajouter la requête
+
+        # 🆕 Générer un nouvel identifiant
+        i = 1
+        while f"req_{i}" in current:
+            i += 1
+        new_id = f"req_{i}"
+
+        # ✅ Ajouter la nouvelle requête
+        current[new_id] = clean_dict
         requetes.set(current)
         ui.notification_show(f"✅ Requête `{new_id}` ajoutée", type="message")
         ui.update_selectize("delete_req", choices=list(requetes().keys()))

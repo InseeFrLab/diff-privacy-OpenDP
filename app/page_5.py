@@ -24,7 +24,7 @@ rho_budget = st.sidebar.slider(r"Budget $\rho$ de l'étude", 0.01, 1.0, value=st
 # Initialisation de la barre dans la sidebar
 progress_bar = st.sidebar.progress(0, text="Progression du traitement des requêtes...")
 
-(context_rho, context_eps) = update_context(rho_budget, st.session_state.poids_requetes_rho, st.session_state.poids_requetes_quantile)
+(context_rho, context_eps) = update_context(context_param, rho_budget, st.session_state.poids_requetes_rho, st.session_state.poids_requetes_quantile)
 
 tab1, tab2, tab3, tab4 = st.tabs(["Résultats", "Précision", "Tableau résumé", "Dataviz"])
 

@@ -107,8 +107,8 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
     # Paramètres fixes
     variance_tricell = {k: v for k, v in variance.items() if len(k) == 3 and isinstance(k, tuple)}
     variance_cell = {k: v for k, v in variance.items() if len(k) == 2 and isinstance(k, tuple)}
-    variance_marge_var = {k: v for k, v in variance.items() if isinstance(k, str) and k != "tot"}
-    variance_marge_tot = variance["tot"] if "tot" in variance else None
+    variance_marge_var = {k: v for k, v in variance.items() if isinstance(k, str) and k != "Total"}
+    variance_marge_tot = variance["Total"] if "Total" in variance else None
 
     variance_req_cellule = {}
     variance_req_marge_var = {}
@@ -209,7 +209,7 @@ def calcul_budget_rho_effectif(variance, nb_modalite):
 
     # Construction du dictionnaire complet des variances effectivement injectées
     variance_effective = {}
-    variance_effective["tot"] = variance_req_marge_tot
+    variance_effective["Total"] = variance_req_marge_tot
     variance_effective.update(variance_req_marge_var)
     variance_effective.update(variance_req_cellule)
     variance_effective.update(variance_tricell)
