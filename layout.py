@@ -101,7 +101,7 @@ def bloc_bruit_gaussien():
                     ),
                     ui.card(
                         ui.card_header("Exemple après bruitage (sans post-traitement)"),
-                        ui.output_data_frame("cross_table_2"),
+                        ui.output_data_frame("cross_table_dp"),
                     ),
                     width=1 / 2,
                 ),

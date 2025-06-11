@@ -3,6 +3,7 @@ import json
 from shiny import App, ui, render, reactive
 import pandas as pd
 import polars as pl
+import io
 from pathlib import Path
 from datetime import datetime
 import numpy as np
@@ -11,7 +12,7 @@ import seaborn as sns
 from shinywidgets import render_widget
 from app.initialisation import update_context
 from src.process_tools import process_request_dp, process_request
-from src.fonctions import eps_from_rho_delta, affichage_requete, affichage_requete_dp, optimiser_budget_dp
+from src.fonctions import eps_from_rho_delta, affichage_requete, affichage_requete_dp, optimiser_budget_dp, update_context_spec, affichage_requete_dp_spec
 import opendp.prelude as dp
 from plots import (
     create_histo_plot, create_fc_emp_plot,
@@ -60,6 +61,7 @@ def normalize_weights(request, input) -> dict:
 
 def organiser_par_by(dico_requetes, dico_valeurs):
     result = defaultdict(dict)
+    result_bis = defaultdict(dict)
     for req, params in dico_requetes.items():
         # clé selon existence et contenu de 'by'
         if 'by' not in params:
@@ -77,12 +79,12 @@ def organiser_par_by(dico_requetes, dico_valeurs):
             else:
                 # cas imprévu, on met en tot par défaut
                 key = 'tot'
-        
+
         # ajouter la valeur correspondante si elle existe dans dico_valeurs
         if req in dico_valeurs:
             result[key] = dico_valeurs[req]
-    
-    return dict(result)
+            result_bis[key] = req
+    return dict(result), dict(result_bis)
 
 
 def count_modalities(df):
@@ -246,49 +248,10 @@ def server(input, output, session):
         ui.modal_remove()
 
     @output
-    @render.ui
-    @reactive.event(input.confirm_validation)
-    async def req_dp_display():
-        data_requetes = requetes()
-        weights = normalize_weights(requetes(), input)
-
-        poids_requetes_rho = [
-            weights[clef]
-            for clef, requete in data_requetes.items()
-            if requete["type"] != "Quantile"
-        ]
-
-        poids_requetes_quantile = [
-            weights[clef]
-            for clef, requete in data_requetes.items()
-            if requete["type"] == "Quantile"
-        ]
-
-        context_param = {
-            "data": pl.from_pandas(dataset()).lazy(),
-            "privacy_unit": dp.unit_of(contributions=1),
-            "margins": [dp.polars.Margin(max_partition_length=10000)],
-        }
-
-        context_rho, context_eps = update_context(
-            context_param, input.budget_total(), poids_requetes_rho, poids_requetes_quantile
-        )
-
-        # --- Barre de progression ---
-        with ui.Progress(min=0, max=len(data_requetes)) as p:
-            p.set(0, message="Traitement en cours...", detail="Analyse requête par requête...")
-            affichage = await affichage_requete_dp(context_rho, context_eps, key_values(), data_requetes, p, resultats_df)
-
-        return affichage
-
-    @output
     @render.download(filename=lambda: "resultats_dp.xlsx")
     def download_xlsx():
-        import io
-        import pandas as pd
 
         resultats = resultats_df()
-
         buffer = io.BytesIO()
 
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -327,8 +290,9 @@ def server(input, output, session):
 
     @render_widget
     def plot_comptage():
-        df = pd.DataFrame(X_count())
-        return create_barplot(df, x_col="requête", y_col="écart_type")
+        result, _ = X_count()
+        df = pd.DataFrame(result)
+        return create_barplot(df, x_col="requête", y_col="écart type", hoover="variable")
 
     @render_widget
     def plot_total_moyenne():
@@ -340,51 +304,42 @@ def server(input, output, session):
     @render_widget
     def plot_quantile():
         df = pd.DataFrame(X_quantile())
-        return create_barplot(df, x_col="requête", y_col="candidats")
+        return create_barplot(df, x_col="requête", y_col="candidats", hoover=None)
 
     @reactive.Calc
     def X_count():
         weights = normalize_weights(requetes(), input)
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["count", "comptage"]}
-        poids = organiser_par_by(reqs, weights)
+        poids, lien = organiser_par_by(reqs, weights)
         nb_modalite = count_modalities(dataset())
         poids_comptage = {k: v for k, v in weights.items() if k in reqs.keys()}
-        optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
-
+        variance_atteinte, variance_req = optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
+        poids_comptage = {lien[k]: v for k, v in variance_req.items() if k in lien}
         results = []
-        for i, (key, request) in enumerate(reqs.items()):
-            poids = list(weights.values())
-            if poids:
-                # mettre le poids courant en premier
-                poids[0], poids[i] = poids[i], poids[0]
+        for i, (key, request) in enumerate(lien.items()):
+            scale = np.sqrt(variance_atteinte[key])
+            results.append({"requête": request, "écart type": scale, "variable": key})
 
-            scale = 1 / np.sqrt(2 * input.budget_total() * poids[0])
-            results.append({"requête": key, "écart_type": scale})
+        return results, poids_comptage
 
-        return results
-
-    
     @reactive.Calc
     def X_total_moyenne():
         weights = normalize_weights(requetes(), input)
         results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["total", "moyenne"]}
         for i, (key, request) in enumerate(reqs.items()):
-            poids = list(weights.values())
-            if poids:
-                # mettre le poids courant en premier
-                poids[0], poids[i] = poids[i], poids[0]
-                
+            poids = weights[key]
             v_min, v_max = request["bounds"]
+
             if request["type"] == "sum" or request["type"] == "Total":
-                scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids[0])
+                scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids)
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
                 list_cv = 100 * scale/resultat["sum"]
                 results.append({"requête": key, "cv (%)": list_cv})
 
             if request["type"] == "mean" or request["type"] == "Moyenne":
-                scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids[0])
-                scale_len = 1 / np.sqrt(input.budget_total() * poids[0])
+                scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids)
+                scale_len = 1 / np.sqrt(input.budget_total() * poids)
                 resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
                 list_cv_tot = scale_tot/resultat["sum"]
                 list_cv_len = scale_len/resultat["count"]
@@ -399,10 +354,7 @@ def server(input, output, session):
         results = []
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["quantile"]}
         for i, (key, request) in enumerate(reqs.items()):
-            poids = list(weights.values())
-            if poids:
-                # mettre le poids courant en premier
-                poids[0], poids[i] = poids[i], poids[0]
+            poids = weights[key]
 
             context_param = {
                 "data": pl.from_pandas(dataset()).lazy(),
@@ -410,17 +362,68 @@ def server(input, output, session):
                 "margins": [dp.polars.Margin(max_partition_length=10000)],
             }
 
-            context_rho, context_eps = update_context(context_param, input.budget_total(), [], poids)
+            context_rho, context_eps = update_context(context_param, input.budget_total(), [], [1])
 
             resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
             nb_candidat = resultat_dp.precision(
                 data=pl.from_pandas(dataset()).lazy(),
-                epsilon=np.sqrt(8 * input.budget_total() * poids[0])
+                epsilon=np.sqrt(8 * input.budget_total() * poids)
             )
             results.append({"requête": key, "candidats": nb_candidat})
 
         return results
 
+    @output
+    @render.ui
+    @reactive.event(input.confirm_validation)
+    async def req_dp_display():
+        data_requetes = requetes()
+        weights = normalize_weights(requetes(), input)
+
+        _, poids_requetes_comptage_special = X_count()
+
+        poids_requetes_comptage_special = [
+            poids_requetes_comptage_special[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] == "Comptage"
+        ]
+
+        poids_requetes_comptage = [
+            weights[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] == "Comptage"
+        ]
+
+        poids_requetes_moyenne_total = [
+            weights[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] != "Quantile" and requete["type"] != "Comptage"
+        ]
+
+        poids_requetes_quantile = [
+            weights[clef]
+            for clef, requete in data_requetes.items()
+            if requete["type"] == "Quantile"
+        ]
+
+        context_param = {
+            "data": pl.from_pandas(dataset()).lazy(),
+            "privacy_unit": dp.unit_of(contributions=1),
+            "margins": [dp.polars.Margin(max_partition_length=10000)],
+        }
+
+        budget_comptage = sum(poids_requetes_comptage) * input.budget_total()
+
+        context_comptage, context_moy_tot, context_quantile = update_context_spec(
+            context_param, input.budget_total(), budget_comptage, poids_requetes_comptage_special, poids_requetes_moyenne_total, poids_requetes_quantile
+        )
+
+        # --- Barre de progression ---
+        with ui.Progress(min=0, max=len(data_requetes)) as p:
+            p.set(0, message="Traitement en cours...", detail="Analyse requête par requête...")
+            affichage = await affichage_requete_dp_spec(context_comptage, context_moy_tot, context_quantile, key_values(), data_requetes, p, resultats_df)
+
+        return affichage
 
     # Page 1 ----------------------------------
 
@@ -504,9 +507,6 @@ def server(input, output, session):
     @output
     @render.download(filename=lambda: "requetes_exportees.json")
     def download_json():
-        import io
-        import json
-
         buffer = io.StringIO()
         json.dump(requetes(), buffer, indent=2, ensure_ascii=False)
         buffer.seek(0)
@@ -575,7 +575,6 @@ def server(input, output, session):
         if not_found:
             ui.notification_show(f"❌ Requête(s) introuvable(s) : {', '.join(not_found)}", type="error")
 
-
     @reactive.effect
     @reactive.event(input.delete_all_btn)
     def _():
@@ -626,7 +625,7 @@ def server(input, output, session):
     @output
     @render.data_frame
     @reactive.event(input.scale_gauss)
-    def cross_table_2():
+    def cross_table_dp():
         from src.request_class import count_dp
 
         key_values = {

@@ -8,22 +8,121 @@ import plotly.colors as pc
 import pandas as pd
 from shiny import ui
 import asyncio
+import opendp.prelude as dp
 
-def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_var, variance_marge_tot, nb_modalite):
+
+async def affichage_requete_dp_spec(context_comptage, context_moyenne_total, context_quantile, key_values, requetes, progress, results_store):
+    from src.process_tools import process_request_dp_spec
+    panels = []
+
+    # Copie de l'état actuel du store
+    current_results = results_store()
+
+    for i, (key, req) in enumerate(requetes.items(), start=1):
+        progress.set(i, message=f"Requête {key} — {req.get('type', '—')}", detail="Calcul en cours...")
+        await asyncio.sleep(0.05)
+
+        resultat_dp = process_request_dp_spec(context_comptage, context_moyenne_total, context_quantile, key_values, req).execute()
+        df_result = resultat_dp.release().collect()
+
+        if req.get("type") == "Moyenne":
+            df_result = df_result.with_columns(mean=pl.col.total / pl.col.len)
+
+        if req.get("by") is not None:
+            df_result = df_result.sort(by=req.get("by"))
+            first_col = df_result.columns[0]
+            new_order = df_result.columns[1:] + [first_col]
+            df_result = df_result.select(new_order)
+
+        # ✅ Stocker le résultat sous forme pandas
+        current_results[key] = df_result.to_pandas()
+
+        param_card = ui.card(
+            ui.card_header("Paramètres"),
+            make_card_body(req)
+        )
+
+        result_card = ui.card(
+            ui.card_header("Résultats après application de la DP"),
+            ui.HTML(df_result.to_pandas().to_html(
+                classes="table table-striped table-hover table-sm text-center align-middle",
+                border=0,
+                index=False
+            )),
+            height="300px",
+            fillable=False,
+            full_screen=True
+        )
+
+        content_row = ui.row(
+            ui.column(4, param_card),
+            ui.column(8, result_card)
+        )
+
+        panels.append(
+            ui.accordion_panel(f"{key} — {req.get('type', '—')}", content_row)
+        )
+
+    # ✅ Mise à jour finale du reactive.Value
+    results_store.set(current_results)
+
+    return ui.accordion(*panels)
+
+
+def update_context_spec(CONTEXT_PARAM, budget_total, budget_comptage, poids_requetes_comptage_special, poids_requetes_moyenne_total, poids_requetes_quantile):
+
+    budget_moyenne_total = budget_total * sum(poids_requetes_moyenne_total)
+    eps_quantile = np.sqrt(8 * budget_total * sum(poids_requetes_quantile))
+
+    if budget_comptage == 0:
+        context_comptage = None
+    else:
+        context_comptage = dp.Context.compositor(
+            **CONTEXT_PARAM,
+            privacy_loss=dp.loss_of(rho=budget_comptage),
+            split_by_weights=poids_requetes_comptage_special
+        )
+
+    if budget_moyenne_total == 0:
+        context_moyenne_total = None
+    else:
+        context_moyenne_total = dp.Context.compositor(
+            **CONTEXT_PARAM,
+            privacy_loss=dp.loss_of(rho=budget_moyenne_total),
+            split_by_weights=poids_requetes_moyenne_total
+        )
+    if eps_quantile == 0:
+        context_quantile = None
+    else:
+        context_quantile = dp.Context.compositor(
+            **CONTEXT_PARAM,
+            privacy_loss=dp.loss_of(epsilon=eps_quantile),
+            split_by_weights=poids_requetes_quantile
+        )
+
+    return context_comptage, context_moyenne_total, context_quantile
+
+def calcul_budget_rho_effectif(variance, nb_modalite):
+
+    # Paramètres fixes
+    variance_tricell = {k: v for k, v in variance.items() if len(k) == 3 and isinstance(k, tuple)}
+    variance_cell = {k: v for k, v in variance.items() if len(k) == 2 and isinstance(k, tuple)}
+    variance_marge_var = {k: v for k, v in variance.items() if isinstance(k, str) and k != "tot"}
+    variance_marge_tot = variance["tot"] if "tot" in variance else None
+
     variance_req_cellule = {}
     variance_req_marge_var = {}
-    nb_var = len(nb_modalite)
 
     croisement_3_3 = [k for k in variance_tricell.keys()]
     croisement_2_2 = [k for k in variance_cell.keys()]
     croisement_1_1 = [k for k in variance_marge_var.keys()]
     croisement_0 = variance_marge_tot
 
-    for croisement_2_a, croisement_2_b in croisement_2_2: # Pour chaque tableau 2x2
+    for croisement_2_a, croisement_2_b in croisement_2_2:  # Pour chaque tableau 2x2
 
         somme_inverse_var_marge_tricell = 0
         for croisement_3 in croisement_3_3:
-            if croisement_2_a in croisement_3 and croisement_2_b in croisement_3 :
+            if croisement_2_a in croisement_3 and croisement_2_b in croisement_3:
                 autre_var = [x for x in croisement_3 if x != croisement_2_a and x != croisement_2_b][0]
                 somme_inverse_var_marge_tricell += 1 / (nb_modalite[autre_var] * variance_tricell[tuple(croisement_3)])
 
@@ -32,6 +131,7 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
             scale_bruit = np.sqrt(variance_cell[croisement_2_a, croisement_2_b] - variance_cellule_precise)
             print(f"Aie on est trop précis pour les cellules du tableau [{croisement_2_a, croisement_2_b}] ({round(np.sqrt(variance_cellule_precise),1)}), on a injecté un bruit de {round(scale_bruit,1)}")
             variance_req_cellule[croisement_2_a, croisement_2_b] = 0
+            variance[croisement_2_a, croisement_2_b] = variance_cellule_precise
 
         else:
             variance_req_cellule[croisement_2_a, croisement_2_b] = 1 / ( (1 / variance_cell[croisement_2_a, croisement_2_b]) - somme_inverse_var_marge_tricell)
@@ -42,7 +142,7 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
             if i in croisement_3:
 
                 autres_indices = [j for j in croisement_3 if j != i]
-                i_1, i_2 = autres_indices 
+                i_1, i_2 = autres_indices
 
                 somme_inverse_var_marge_tricell += (
                     1 / (nb_modalite[i_1] * nb_modalite[i_2] * variance_tricell[tuple(croisement_3)])
@@ -50,16 +150,17 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
 
         somme_inverse_var_marge_cell = 0
 
-        for (croisement_2_a, croisement_2_b), variance in variance_req_cellule.items():
-            if i in (croisement_2_a, croisement_2_b) and variance > 0:
+        for (croisement_2_a, croisement_2_b), variance_cell in variance_req_cellule.items():
+            if i in (croisement_2_a, croisement_2_b) and variance_cell > 0:
                 autre_var = croisement_2_a if croisement_2_b == i else croisement_2_b
-                somme_inverse_var_marge_cell += 1 / (nb_modalite[autre_var] * variance)       
+                somme_inverse_var_marge_cell += 1 / (nb_modalite[autre_var] * variance_cell)       
 
         if (1/variance_marge_var[i] - somme_inverse_var_marge_cell - somme_inverse_var_marge_tricell) <= 0:
             variance_marge_var_precise = 1 / (somme_inverse_var_marge_cell + somme_inverse_var_marge_tricell)
             scale_bruit = np.sqrt(variance_marge_var[i] - variance_marge_var_precise)
             print(f"Aie on est trop précis pour la marge de la variable {i} ({round(np.sqrt(variance_marge_var_precise),1)}), on a injecté un bruit de {round(scale_bruit,1)}")
             variance_req_marge_var[i] = 0
+            variance[i] = variance_marge_var_precise
 
         else:
             variance_req_marge_var[i] = 1 / (1/variance_marge_var[i] - somme_inverse_var_marge_cell - somme_inverse_var_marge_tricell)
@@ -73,7 +174,7 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
         somme_inverse_var_tot_cell = sum(
             1 / (nb_modalite[var_1] * nb_modalite[var_2] * variance_req_cellule[var_1, var_2])
             for var_1, var_2 in croisement_2_2
-            if variance_req_cellule[var_1, var_2] >0
+            if variance_req_cellule[var_1, var_2] > 0
         )
 
         somme_inverse_var_tot_marge = sum(
@@ -83,10 +184,11 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
         )
 
         if (1/variance_marge_tot - somme_inverse_var_tot_tricell - somme_inverse_var_tot_cell - somme_inverse_var_tot_marge) <= 0:
-            variance_marge_tot_precise = 1 / ( somme_inverse_var_tot_marge + somme_inverse_var_tot_cell + somme_inverse_var_tot_tricell)
+            variance_marge_tot_precise = 1 / (somme_inverse_var_tot_marge + somme_inverse_var_tot_cell + somme_inverse_var_tot_tricell)
             scale_bruit = np.sqrt(variance_marge_tot - variance_marge_tot_precise)
             print(f"Aie on est trop précis pour la marge tot ({round(np.sqrt(variance_marge_tot_precise),1)}), il faut injecté un bruit de {round(scale_bruit,1)}")
             variance_req_marge_tot = 0
+            variance["tot"] = variance_marge_tot_precise
 
         else:
             variance_req_marge_tot = 1 / (1/variance_marge_tot - somme_inverse_var_tot_marge - somme_inverse_var_tot_cell - somme_inverse_var_tot_tricell)
@@ -94,78 +196,55 @@ def calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_v
     else:
         variance_req_marge_tot = 0
         variance_marge_tot = 0
-    # Construction de la chaîne des écarts types des marges
-
-    tricellules_str = ', '.join(
-        f"{round(np.sqrt(variance), 1)} croisement [{a},{b},{c}]" for (a, b, c), variance in variance_tricell.items()
-    )
-
-    cellules_str = ', '.join(
-        f"{round(np.sqrt(variance), 1)} croisement [{a},{b}]" for (a, b), variance in variance_req_cellule.items()
-    )
-
-    marges_str = ', '.join(
-        f"{round(np.sqrt(v), 1)} croisement [{a}]" for a, v in variance_req_marge_var.items()
-    )
 
     rho = (
         sum(1/(2 * variance)
         for variance in variance_tricell.values()) +
-        sum(1/(2*variance) if variance > 0 else 0
+        sum(1/(2 * variance) if variance > 0 else 0
         for variance in variance_req_cellule.values()) +
-        sum(1/(2*variance) if variance > 0 else 0
-        for variance in variance_req_marge_var.values()) 
+        sum(1/(2 * variance) if variance > 0 else 0
+        for variance in variance_req_marge_var.values())
     )
-    rho += 1/(2* variance_req_marge_tot) if variance_req_marge_tot > 0 else 0
+    rho += 1/(2 * variance_req_marge_tot) if variance_req_marge_tot > 0 else 0
 
-    # Conversion des dictionnaires de variances en écart types arrondis à 1 chiffre
-    def format_ecart_type(dic):
-        return {k: round(np.sqrt(v), 1) for k, v in dic.items()}
-
+    # Construction du dictionnaire complet des variances effectivement injectées
+    variance_effective = {}
+    variance_effective["tot"] = variance_req_marge_tot
+    variance_effective.update(variance_req_marge_var)
+    variance_effective.update(variance_req_cellule)
+    variance_effective.update(variance_tricell)
 
     # Impression formatée
     print(f"""
-    Dans le cas où je veux que toutes mes estimations soient à écart type ({format_ecart_type(variance_tricell)}, {format_ecart_type(variance_cell)}, {format_ecart_type(variance_marge_var)}, {np.sqrt(variance_marge_tot),1}) :
-        - Il faut que je fasse {len(croisement_3_3)} requête à écart type {tricellules_str} pour les cellules des tableaux à 3 variables
-        - Il faut que je fasse {len(croisement_2_2)} requêtes à écart type {cellules_str} pour les cellules des tableaux à 2 variables
-        - Il faut que je fasse {len(croisement_1_1)} requêtes à écart type {marges_str} pour les marges
-        - Enfin une requête à écart type {round(np.sqrt(variance_req_marge_tot),1)} pour le comptage total
-        Ce qui fait un budget en rho dépensé de {round(rho,4)}
+    Voici les variances atteintes :
+    {variance}
+    Voici les variances à injecter effectivement pour satisfaire ces contraintes :
+    {variance_effective}
     """)
 
-    return rho
+    return rho, variance, variance_effective
+
 
 def optimiser_budget_dp(budget_rho, nb_modalite, poids, alpha=1/100):
 
     total = sum(poids.values())
-    poids =  {k: v / total for k, v in poids.items()}
+    poids = {k: v / total for k, v in poids.items()}
+    variance = {k: 1/(2 * poids * budget_rho) for k, poids in poids.items()}
 
-    variance = {k: 1/(2*poids*budget_rho) for k, poids in poids.items()}
-
-    # Paramètres fixes
-    variance_tricell = {k: v  for k, v in variance.items() if len(k)==3 and isinstance(k, tuple)}
-    variance_cell = {k: v  for k, v in variance.items() if len(k)==2 and isinstance(k, tuple)}
-    variance_marge_var = {k: v for k, v in variance.items() if isinstance(k, str) and k !="tot"}
-    variance_marge_tot = variance["tot"] if "tot" in variance else None
-
-    rho = calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_var, variance_marge_tot, nb_modalite)
     rho_supp = budget_rho
+    rho, variance_atteinte, variance_req = calcul_budget_rho_effectif(variance, nb_modalite)
+    last_valid_variance, last_variance_req = variance_atteinte, variance_req
 
     while rho < budget_rho:
+        last_valid_variance, last_variance_req = variance_atteinte, variance_req
         rho_supp = rho_supp + rho * alpha
-        variance = {k: 1/(2*poids*rho_supp) for k, poids in poids.items()}
+        variance = {k: 1/(2 * poids * rho_supp) for k, poids in poids.items()}
 
-        # Paramètres fixes
-        variance_tricell = {k: v  for k, v in variance.items() if len(k)==3 and isinstance(k, tuple)}
-        variance_cell = {k: v  for k, v in variance.items() if len(k)==2 and isinstance(k, tuple)}
-        variance_marge_var = {k: v for k, v in variance.items() if isinstance(k, str) and k !="tot"}
-        variance_marge_tot = variance["tot"] if "tot" in variance else None
+        rho, variance_atteinte, variance_req = calcul_budget_rho_effectif(variance, nb_modalite)
 
-        rho = calcul_budget_rho_effectif(variance_tricell, variance_cell, variance_marge_var, variance_marge_tot, nb_modalite)
+    return last_valid_variance, last_variance_req
 
-    return rho
 
-    
 def affichage_requete(requetes, dataset):
     from src.process_tools import process_request
 

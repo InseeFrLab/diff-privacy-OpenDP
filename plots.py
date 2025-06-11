@@ -78,33 +78,37 @@ def create_scatterplot(df, x_col, y_col, size_col=False):
     return fig
 
 
-
-def create_barplot(df, x_col, y_col):
+def create_barplot(df, x_col, y_col, hoover=None):
     fig = go.Figure()
 
     if not df.empty:
+        # Préparation du texte pour les infobulles
+        if hoover is not None and hoover in df.columns:
+            hover_texts = [
+                f"Croisement : {cross}<br>{y_col}: {val:.2f}" if isinstance(val, (int, float)) else f"Croisement : {cross}<br>{y_col}: {val}"
+                for cross, val in zip(df[hoover], df[y_col])
+            ]
+        else:
+            hover_texts = [
+                f"{y_col}: {val:.2f}" if isinstance(val, (int, float)) else f"{y_col}: {val}"
+                for val in df[y_col]
+            ]
+
         bar_args = dict(
-            x=df[x_col],
-            y=df[y_col],
+            x=df[y_col],  # valeurs numériques
+            y=df[x_col],  # catégories
+            orientation="h",
             marker=dict(
                 color="steelblue",
                 line=dict(width=0),
                 opacity=0.85,
-                # Note: "cornerradius" n'est pas un paramètre officiel plotly, on peut l'enlever ou remplacer
             ),
-            text=[
-                f"{v:.2f}" if isinstance(v, (int, float)) else str(v)
-                for v in df[y_col]
-            ],
-            hovertemplate=(
-                f"<b>%{{text}}</b>"
-                + (f"<br>{x_col}: %{{x:.2f}}" if pd.api.types.is_numeric_dtype(df[x_col]) else f"<br>{x_col}: %{{x}}")
-                + (f"<br>{y_col}: %{{y:.2f}}" if pd.api.types.is_numeric_dtype(df[y_col]) else f"<br>{y_col}: %{{y}}")
-                + "<extra></extra>"
-            ),
+            text=hover_texts,
+            hovertemplate="%{text}<extra></extra>",
             textposition="auto",
             textfont=dict(color="white")
         )
+
         fig.add_trace(go.Bar(**bar_args))
     else:
         fig.add_trace(
@@ -119,15 +123,16 @@ def create_barplot(df, x_col, y_col):
         )
     
     fig.update_layout(
-        xaxis_title=x_col,
-        yaxis_title=y_col,
+        xaxis_title=y_col,
+        yaxis_title=x_col,
         plot_bgcolor='white',
         margin=dict(t=40, r=30, l=60, b=60),
         xaxis=dict(showgrid=True, gridcolor='lightgray', linecolor='black', linewidth=1, mirror=True),
         yaxis=dict(showgrid=True, gridcolor='lightgray', linecolor='black', linewidth=1, mirror=True),
     )
-    
+
     return fig
+
 
 def create_histo_plot(df, quantile_alpha):
     """
