@@ -29,14 +29,27 @@ from layout import (
     page_a_propos
 )
 from collections import defaultdict
-import os, s3fs
+import os
+from functools import lru_cache
 
-fs = s3fs.S3FileSystem(
-    client_kwargs={'endpoint_url': 'https://'+'minio.lab.sspcloud.fr'},
-    key=os.environ["AWS_ACCESS_KEY_ID"],
-    secret=os.environ["AWS_SECRET_ACCESS_KEY"],
-    token=os.environ["AWS_SESSION_TOKEN"]
-)
+@lru_cache
+def load_data(path: str):
+    if path.startswith("s3://"):
+        df = pl.read_parquet(path, storage_options=storage_options)
+    else:
+        df = pl.read_parquet(path)
+
+    if "geometry" in df.columns:
+        df = df.drop("geometry")
+
+    return df
+
+storage_options = {
+    "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
+    "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
+    "aws_session_token": os.environ["AWS_SESSION_TOKEN"],
+    "endpoint_url": "https://minio.lab.sspcloud.fr",
+}
 
 dp.enable_features("contrib")
 
@@ -95,13 +108,18 @@ def organiser_par_by(dico_requetes, dico_valeurs):
     return dict(result), dict(result_bis)
 
 
-def count_modalities(df):
+def count_modalities(df: pl.DataFrame) -> dict:
     if df is None:
         return {}
-    # Sélection des colonnes qualitatives
-    qualitative_cols = df.select_dtypes(include=["object", "category", "bool"]).columns
-    # Calcul du nombre de modalités par variable
-    result = {col: df[col].nunique(dropna=True) for col in qualitative_cols}
+
+    # On sélectionne les colonnes de type 'str' ou 'bool'
+    qualitative_cols = [
+        col for col, dtype in zip(df.columns, df.dtypes)
+        if dtype in [pl.Utf8, pl.Boolean]
+    ]
+
+    # Calcul du nombre de modalités uniques par colonne
+    result = {col: df[col].n_unique() for col in qualitative_cols}
     return result
 
 
@@ -335,11 +353,14 @@ def server(input, output, session):
         weights = normalize_weights(requetes(), input)
         reqs = {k: v for k, v in requetes().items() if v["type"].lower() in ["count", "comptage"]}
         poids, lien = organiser_par_by(reqs, weights)
+        print(1)
         nb_modalite = count_modalities(dataset())
+        print(2)
         poids_comptage = {k: v for k, v in weights.items() if k in reqs.keys()}
         variance_atteinte, variance_req, poids_estimateur = optimiser_budget_dp(budget_rho=input.budget_total() * sum(poids_comptage.values()), nb_modalite=nb_modalite, poids=poids)
         poids_comptage = {lien[k]: v for k, v in variance_req.items() if k in lien}
         results = []
+
         for i, (key, request) in enumerate(lien.items()):
             scale = np.sqrt(variance_atteinte[key])
             results.append({"requête": request, "écart type": scale, "variable": key})
@@ -356,7 +377,7 @@ def server(input, output, session):
             v_min, v_max = request["bounds"]
 
             scale = max(abs(v_min), abs(v_max)) / np.sqrt(2 * input.budget_total() * poids)
-            resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
+            resultat = process_request(dataset().lazy(), request)
             list_cv = 100 * scale/resultat["sum"]
             results.append({"requête": key, "cv (%)": list_cv})
 
@@ -373,7 +394,7 @@ def server(input, output, session):
 
             scale_tot = max(abs(v_min), abs(v_max)) / np.sqrt(input.budget_total() * poids)
             scale_len = 1 / np.sqrt(input.budget_total() * poids)
-            resultat = process_request(pl.from_pandas(dataset()).lazy(), request)
+            resultat = process_request(dataset().lazy(), request)
             list_cv_tot = scale_tot/resultat["sum"]
             list_cv_len = scale_len/resultat["count"]
             list_cv = [100 * np.sqrt(list_cv_tot[i]**2 + list_cv_len[i]**2) for i in range(len(list_cv_tot))]
@@ -390,7 +411,7 @@ def server(input, output, session):
             poids = weights[key]
 
             context_param = {
-                "data": pl.from_pandas(dataset()).lazy(),
+                "data": dataset().lazy(),
                 "privacy_unit": dp.unit_of(contributions=1),
                 "margins": [dp.polars.Margin(max_partition_length=10000)],
             }
@@ -399,7 +420,7 @@ def server(input, output, session):
 
             resultat_dp = process_request_dp(context_rho, context_eps, key_values(), request)
             nb_candidat = resultat_dp.precision(
-                data=pl.from_pandas(dataset()).lazy(),
+                data=dataset().lazy(),
                 epsilon=np.sqrt(8 * input.budget_total() * poids)
             )
             results.append({"requête": key, "candidats": nb_candidat})
@@ -440,7 +461,7 @@ def server(input, output, session):
         ]
 
         context_param = {
-            "data": pl.from_pandas(dataset()).lazy(),
+            "data": dataset().lazy(),
             "privacy_unit": dp.unit_of(contributions=1),
             "margins": [dp.polars.Margin(max_partition_length=10000)],
         }
@@ -467,31 +488,29 @@ def server(input, output, session):
         if file is not None:
             ext = Path(file["name"]).suffix
             if ext == ".csv":
-                return pd.read_csv(file["datapath"])
+                return pl.read_csv(file["datapath"])
             elif ext == ".parquet":
-                return pd.read_parquet(file["datapath"])
+                return load_data(file["datapath"])
             else:
                 raise ValueError("Format non supporté : utiliser CSV ou Parquet")
         else:
             if input.default_dataset() == "penguins":
-                return sns.load_dataset(input.default_dataset()).dropna()
+                return pl.DataFrame(sns.load_dataset(input.default_dataset()).dropna())
             else:
-                return pd.read_parquet(input.default_dataset(), filesystem=fs)
+                return load_data(input.default_dataset())
 
     # Afficher le dataset
     @output
     @render.data_frame
     def data_view():
-        return dataset()
+        return dataset().head(1000)
 
     # Afficher le résumé statistique
     @output
     @render.data_frame
     def data_summary():
-        df = dataset().describe(include="all")
-        df = df.round(2)
-        df.insert(0, "Statistique", df.index)  # ajouter la colonne "Statistique"
-        df.reset_index(drop=True, inplace=True)
+        df = dataset().describe(percentiles=[0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9])
+
         return df
 
     # Page 2 ----------------------------------
@@ -502,8 +521,17 @@ def server(input, output, session):
         if df is None:
             return {}
 
-        qualitative = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-        quantitative = df.select_dtypes(include=["number"]).columns.tolist()
+        qualitative = [
+            col for col, dtype in zip(df.columns, df.dtypes)
+            if dtype in (pl.Utf8, pl.Categorical, pl.Boolean)
+        ]
+
+        quantitative = [
+            col for col, dtype in zip(df.columns, df.dtypes)
+            if dtype in (pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+                        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+                        pl.Float32, pl.Float64)
+        ]
         return {
             "": "",
             "🔤 Qualitatives": {col: col for col in qualitative},
@@ -513,9 +541,16 @@ def server(input, output, session):
     @reactive.Calc
     def key_values():
         df = dataset()
-        qualitatif_cols = df.select_dtypes(include=["object", "category"]).columns
+
+        # Détecter les colonnes qualitatives (str ou catégorie)
+        qualitatif_cols = [
+            col for col, dtype in zip(df.columns, df.dtypes)
+            if dtype in [pl.Utf8, pl.Categorical]
+        ]
+
+        # Extraire les modalités uniques, triées, sans NaN
         return {
-            col: sorted(df[col].dropna().unique().tolist())
+            col: sorted(df[col].drop_nulls().unique().to_list())
             for col in qualitatif_cols
         }
 
@@ -574,7 +609,7 @@ def server(input, output, session):
         # Nettoyage des valeurs nulles ou vides
         clean_dict = {
             k: v for k, v in base_dict.items()
-            if v not in [None, "", (), ["", ""]]
+            if v not in [None, "", (), ["", ""], []]
         }
 
         # 🔍 Vérifier si la même requête existe déjà

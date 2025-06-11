@@ -47,8 +47,9 @@ def sidebar_donnees():
             "default_dataset",
             "Choisir un jeu de données prédéfini:",
             {
-                "penguins": "Palmer Penguins", 
+                "penguins": "Palmer Penguins",
                 "s3://gferey/diffusion/synthetic-filo/METRO/households/households_METRO.parquet": "Foyers Métropole",
+                "s3://gferey/diffusion/synthetic-filo/METRO/population/population_METRO.parquet": "Population Métropole",
                 "s3://gferey/diffusion/synthetic-filo/974/households/households_974.parquet": "Foyers Réunion",
                 "s3://gferey/diffusion/synthetic-filo/974/population/population_974.parquet": "Population Réunion"
             }

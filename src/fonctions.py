@@ -275,7 +275,7 @@ def affichage_requete(requetes, dataset):
 
     for key, req in requetes.items():
         # Colonne de gauche : paramètres
-        df = pl.from_pandas(dataset).lazy()
+        df = dataset.lazy()
         resultat = process_request(df, req)
 
         if req.get("by") is not None:
