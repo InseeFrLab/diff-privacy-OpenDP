@@ -44,6 +44,7 @@ def load_data(path: str):
 
     return df
 
+
 storage_options = {
     "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
     "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
@@ -676,7 +677,7 @@ def server(input, output, session):
         if current:
             current.clear()  # Vide toutes les requêtes
             requetes.set(current)  # Met à jour le reactive.Value
-            ui.notification_show(f"🗑️ TOUTES les requêtes ont été supprimé", type="warning")   
+            ui.notification_show(f"🗑️ TOUTES les requêtes ont été supprimé", type="warning")
             ui.update_selectize("delete_req", choices=list(requetes().keys()))
 
     @output
