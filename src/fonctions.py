@@ -267,6 +267,102 @@ def optimiser_budget_dp(budget_rho, nb_modalite, poids, alpha=1/100):
 
     return last_valid_variance, last_variance_req, last_poids_estimateur
 
+# Fonction pour forcer une variable à 0 en modifiant A et b
+def impose_zero(A, b, index):
+    A[index - 1, :] = 0
+    A[index -1 , index] = -1
+    b[index - 1] = 0
+    return A, b
+
+# Résolution itérative avec contraintes positives
+def solve_projected(A, b):
+    for _ in range(10):  # max 10 itérations
+        try:
+            x = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            print("❌ Système non inversible.")
+            return None
+        
+        if np.all(x >= -1e-10):
+            return np.clip(x, 0, None)
+
+        # On impose à 0 les variables négatives
+        for i, val in enumerate(x):
+            if val < 0:
+                A, b = impose_zero(A, b, i)
+
+    print("❌ Convergence non atteinte.")
+    return None
+
+
+def sys_budget_dp(budget_rho, nb_modalite, poids):
+
+    total = sum(poids.values())
+    poids = {k: v / total for k, v in poids.items()}
+    poids_set = {
+        frozenset() if k == 'Total' else frozenset([k]) if isinstance(k, str) else frozenset(k): v
+        for k, v in poids.items()
+    }
+
+    subsets = [s for s in poids_set.keys()]
+
+    # Taille totale
+    N = len(poids_set)
+
+    # Matrices initialisées
+    Q = np.zeros((N, N))
+    # Construction de Q
+    for i, Ei in enumerate(subsets):
+        for j, Ej in enumerate(subsets):
+            if Ei == Ej:
+                Q[i, j] = -1
+            elif Ei.issubset(Ej):
+                diff = Ej - Ei
+                prod = 1
+                for k in diff:
+                    prod *= nb_modalite[k]
+                Q[i, j] = -1 / prod
+
+    P = np.zeros((N, 1))
+    for i, subset in enumerate(subsets):
+        P[i, 0] = 2 * poids_set.get(frozenset(subset), 0)
+
+    b = np.zeros((N + 1, 1))
+    b[-1, 0] = budget_rho
+
+    A = np.zeros((N + 1, N + 1))
+    A[:N, 0] = P.flatten()
+    A[:N, 1:] = Q
+    A[N, 1:] = 0.5
+
+    x_sol = solve_projected(A.copy(), b.copy())
+    print(x_sol)
+    variance_req = {}
+    variance_atteinte = {}
+    poids_estimateur = {}
+    if x_sol is not None:
+        print(f"ρ optimal = {x_sol[0].item():.3f}")
+        for i, ((nom, p), x) in enumerate(zip(poids.items(), x_sol[1:])):
+            if x.item() != 0:
+                var_estim = 1/(2*p*x_sol[0].item())
+                variance_req[nom] = 1/x.item()
+                print(f"Variance de la requête pour {nom} = {1/x.item():.2f} et variance d'estimation = {var_estim:.2f}")
+            else:
+                var_estim = -1/np.dot(Q[i], x_sol[1:].flatten())
+                print(f"Pas de requête pour {nom} et de variance d'estimation = {var_estim:.2f}")
+       
+            variance_atteinte[nom] = var_estim
+            poids_estimateur[nom] = {}
+            for j, ((nom_2, _), x_2) in enumerate(zip(poids.items(), x_sol[1:])):
+                poids_estim = -var_estim * Q[i][j]*x_sol[1+j].item()
+                if poids_estim > 0:
+                    poids_estimateur[nom][nom_2] = poids_estim
+                    print(f"- Poids de l'estimation par {nom_2} = {poids_estim:.2f}")
+    else:
+        print("❌ Aucune solution admissible.")
+
+    return variance_atteinte, variance_req, poids_estimateur
+
 
 def affichage_requete(requetes, dataset):
     from src.process_tools import process_request
